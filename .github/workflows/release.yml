@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZON_VERSION=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon | head -1)
+          if [ "$VERSION" != "$ZON_VERSION" ]; then
+            echo "Tag version ($VERSION) does not match build.zig.zon ($ZON_VERSION)" >&2
+            exit 1
+          fi
+          if ! grep -q "simutex ${VERSION}" src/main.zig; then
+            echo "src/main.zig version string does not match ${VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Create binary tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          cp zig-out/bin/simutex dist/
+          COPYFILE_DISABLE=1 tar -czf "dist/simutex-${VERSION}-macos-arm64.tar.gz" -C dist simutex
+
+      - name: Compute SHA256 of source archive
+        id: sha
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          curl -sL -o /tmp/source.tar.gz \
+            "https://github.com/sichengchen/simutex/archive/refs/tags/${TAG}.tar.gz"
+          SHA=$(shasum -a 256 /tmp/source.tar.gz | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/simutex-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+          generate_release_notes: true
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        if: env.GH_TOKEN != ''
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+          REPO="sichengchen/simutex"
+          TAP_REPO="sichengchen/homebrew-tap"
+
+          gh repo clone "${TAP_REPO}" /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git"
+
+          mkdir -p Formula
+
+          cat > Formula/simutex.rb <<FORMULA
+          class Simutex < Formula
+            desc "Tiny mutex for iOS Simulators"
+            homepage "https://github.com/${REPO}"
+            url "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+            sha256 "${SHA}"
+            license "MIT"
+
+            depends_on :macos
+            depends_on "zig" => :build
+            depends_on xcode: :build
+
+            def install
+              system "zig", "build", "-Doptimize=ReleaseSafe", "--prefix", prefix.to_s
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/simutex version")
+            end
+          end
+          FORMULA
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/simutex.rb
+          git commit -m "Update simutex to ${TAG}" || true
+          git push
