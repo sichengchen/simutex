@@ -7,11 +7,19 @@ pub fn build(b: *std.Build) void {
     const simutex = b.addModule("simutex", .{
         .root_source_file = b.path("src/simutex.zig"),
         .target = target,
+        .optimize = optimize,
     });
     simutex.addIncludePath(b.path("src"));
+    // Keep ObjC free of UBSan even in Debug: Apple's inlined dispatch_once
+    // uses __builtin_assume, which becomes SIGTRAP under -fsanitize=undefined.
+    const objc_flags: []const []const u8 = &.{
+        "-fobjc-arc",
+        "-fblocks",
+        "-fno-sanitize=undefined",
+    };
     simutex.addCSourceFile(.{
         .file = b.path("src/core_simulator_bridge.m"),
-        .flags = &.{ "-fobjc-arc", "-fblocks" },
+        .flags = objc_flags,
     });
     simutex.linkFramework("Foundation", .{});
     simutex.linkSystemLibrary("objc", .{});
