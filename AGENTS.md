@@ -19,7 +19,7 @@ Manual alternative:
 
 1. Bump the version in `build.zig.zon` and the `simutex version` string in `src/main.zig`.
 2. Merge to `main`, then tag and push (for example `v0.1.0`).
-3. `.github/workflows/release.yml` builds the release binary, publishes a GitHub Release, and opens a squash-merged PR on [`sichengchen/homebrew-tap`](https://github.com/sichengchen/homebrew-tap) for `Formula/simutex.rb`.
+3. `.github/workflows/release.yml` builds the macOS arm64 binary, publishes a GitHub Release, and opens a squash-merged PR on [`sichengchen/homebrew-tap`](https://github.com/sichengchen/homebrew-tap) for `Formula/simutex.rb` (installs the release binary, no Zig/Xcode at `brew install` time).
 
 The tag (`vMAJOR.MINOR.PATCH`) must match both version strings. The release workflow needs a `TAP_GITHUB_TOKEN` repository secret with access to the tap (`contents` + `pull requests`). Without it, the GitHub Release still publishes; the formula update is skipped.
 

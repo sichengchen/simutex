@@ -56,27 +56,16 @@ jobs:
         run: zig build -Doptimize=ReleaseSafe
 
       - name: Create binary tarball
+        id: package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist
           cp zig-out/bin/simutex dist/
-          COPYFILE_DISABLE=1 tar -czf "dist/simutex-${VERSION}-macos-arm64.tar.gz" -C dist simutex
-
-      - name: Compute SHA256 of source archive
-        id: sha
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          # Tag was just pushed; retry briefly if the source archive is not ready yet.
-          for _ in 1 2 3 4 5; do
-            if curl -fsSL -o /tmp/source.tar.gz \
-              "https://github.com/sichengchen/simutex/archive/refs/tags/${TAG}.tar.gz"; then
-              break
-            fi
-            sleep 2
-          done
-          test -s /tmp/source.tar.gz
-          SHA=$(shasum -a 256 /tmp/source.tar.gz | awk '{print $1}')
-          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          ARCHIVE="dist/simutex-${VERSION}-macos-arm64.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C dist simutex
+          SHA=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -92,9 +81,10 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
-          SHA="${{ steps.sha.outputs.sha256 }}"
+          SHA="${{ steps.package.outputs.sha256 }}"
           REPO="sichengchen/simutex"
           TAP_REPO="sichengchen/homebrew-tap"
+          ASSET="simutex-${VERSION}-macos-arm64.tar.gz"
           BRANCH="release/simutex-${TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           gh auth setup-git
@@ -107,16 +97,15 @@ jobs:
           class Simutex < Formula
             desc "Tiny mutex for iOS Simulators"
             homepage "https://github.com/${REPO}"
-            url "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+            url "https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
             sha256 "${SHA}"
             license "MIT"
 
             depends_on :macos
-            depends_on "zig" => :build
-            depends_on xcode: :build
+            depends_on arch: :arm64
 
             def install
-              system "zig", "build", "-Doptimize=ReleaseSafe", "--prefix", prefix.to_s
+              bin.install "simutex"
             end
 
             test do
@@ -126,6 +115,11 @@ jobs:
           FORMULA
 
           git add Formula/simutex.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew formula already up to date for ${TAG}; skipping tap PR."
+            exit 0
+          fi
+
           git -c user.name="github-actions[bot]" \
             -c user.email="github-actions[bot]@users.noreply.github.com" \
             commit -m "Update simutex to ${TAG}"
@@ -136,5 +130,5 @@ jobs:
             --base main \
             --head "${BRANCH}" \
             --title "Update simutex to ${TAG}" \
-            --body "Automated formula update from ${REPO}@${TAG}.")
+            --body "Automated binary formula update from ${REPO}@${TAG}.")
           gh pr merge --repo "${TAP_REPO}" --squash --delete-branch "${pr_url}"
