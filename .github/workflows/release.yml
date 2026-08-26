@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        description: Version without the leading v (e.g. 0.1.2)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,6 +19,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.version && format('v{0}', inputs.version) || github.ref }}
 
       - name: Install Zig
         run: |
@@ -24,7 +32,14 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          fi
+
           ZON_VERSION=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon | head -1)
           if [ "$VERSION" != "$ZON_VERSION" ]; then
             echo "Tag version ($VERSION) does not match build.zig.zon ($ZON_VERSION)" >&2
@@ -35,7 +50,7 @@ jobs:
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseSafe
@@ -51,14 +66,22 @@ jobs:
         id: sha
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          curl -sL -o /tmp/source.tar.gz \
-            "https://github.com/sichengchen/simutex/archive/refs/tags/${TAG}.tar.gz"
+          # Tag was just pushed; retry briefly if the source archive is not ready yet.
+          for _ in 1 2 3 4 5; do
+            if curl -fsSL -o /tmp/source.tar.gz \
+              "https://github.com/sichengchen/simutex/archive/refs/tags/${TAG}.tar.gz"; then
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/source.tar.gz
           SHA=$(shasum -a 256 /tmp/source.tar.gz | awk '{print $1}')
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           files: dist/simutex-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
           generate_release_notes: true
 
