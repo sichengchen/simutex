@@ -18,14 +18,6 @@ zig build -Doptimize=ReleaseSafe
 
 The binary is written to `zig-out/bin/simutex`.
 
-## Release
-
-1. Bump the version in `build.zig.zon` and the `simutex version` string in `src/main.zig`.
-2. Merge to `main`, then tag and push (for example `v0.1.0`).
-3. GitHub Actions builds the release, publishes a GitHub Release, and updates [`sichengchen/homebrew-tap`](https://github.com/sichengchen/homebrew-tap).
-
-The release workflow needs a `TAP_GITHUB_TOKEN` repository secret with write access to the tap. Without it, the GitHub Release still publishes; the formula update is skipped.
-
 ## Install the agent skill
 
 Run the interactive terminal setup after installing the CLI:
