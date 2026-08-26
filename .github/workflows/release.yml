@@ -72,11 +72,12 @@ jobs:
           SHA="${{ steps.sha.outputs.sha256 }}"
           REPO="sichengchen/simutex"
           TAP_REPO="sichengchen/homebrew-tap"
+          BRANCH="release/simutex-${TAG}-${GITHUB_RUN_ID}"
 
+          gh auth setup-git
           gh repo clone "${TAP_REPO}" /tmp/homebrew-tap
           cd /tmp/homebrew-tap
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git"
-
+          git checkout -b "${BRANCH}" origin/main
           mkdir -p Formula
 
           cat > Formula/simutex.rb <<FORMULA
@@ -101,8 +102,16 @@ jobs:
           end
           FORMULA
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/simutex.rb
-          git commit -m "Update simutex to ${TAG}" || true
-          git push
+          git -c user.name="github-actions[bot]" \
+            -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -m "Update simutex to ${TAG}"
+          git push -u origin "${BRANCH}"
+
+          pr_url=$(gh pr create \
+            --repo "${TAP_REPO}" \
+            --base main \
+            --head "${BRANCH}" \
+            --title "Update simutex to ${TAG}" \
+            --body "Automated formula update from ${REPO}@${TAG}.")
+          gh pr merge --repo "${TAP_REPO}" --squash --delete-branch "${pr_url}"
