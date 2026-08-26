@@ -95,7 +95,7 @@ jobs:
           SHA="${{ steps.sha.outputs.sha256 }}"
           REPO="sichengchen/simutex"
           TAP_REPO="sichengchen/homebrew-tap"
-          BRANCH="release/simutex-${TAG}-${GITHUB_RUN_ID}"
+          BRANCH="release/simutex-${TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           gh auth setup-git
           gh repo clone "${TAP_REPO}" /tmp/homebrew-tap
@@ -129,7 +129,7 @@ jobs:
           git -c user.name="github-actions[bot]" \
             -c user.email="github-actions[bot]@users.noreply.github.com" \
             commit -m "Update simutex to ${TAG}"
-          git push -u origin "${BRANCH}"
+          git push -u --force-with-lease origin "${BRANCH}"
 
           pr_url=$(gh pr create \
             --repo "${TAP_REPO}" \
