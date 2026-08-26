@@ -55,7 +55,7 @@ fn run(init: std.process.Init) !void {
     const command = args[1];
     if (std.mem.eql(u8, command, "version") or std.mem.eql(u8, command, "--version")) {
         if (args.len != 2) return error.InvalidArguments;
-        try stdout.writeAll("simutex 0.1.0\n");
+        try stdout.writeAll("simutex 0.2.0\n");
         return;
     }
     if (std.mem.eql(u8, command, "init")) {
