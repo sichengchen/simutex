@@ -12,11 +12,14 @@ jobs:
   release:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zig-aarch64-macos-0.16.0/zig" version
 
       - name: Get version
         id: version
@@ -54,7 +57,7 @@ jobs:
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/simutex-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
           generate_release_notes: true
