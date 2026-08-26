@@ -9,7 +9,7 @@ zig build -Doptimize=ReleaseSafe
 zig build test
 ```
 
-CI runs the same on `macos-15` via `.github/workflows/ci.yml` for `main`, PRs, and `v*` tags.
+CI runs the same on `macos-15` via `.github/workflows/ci.yml`.
 
 ## Release
 
