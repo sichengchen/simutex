@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
         .file = b.path("src/core_simulator_bridge.m"),
         .flags = objc_flags,
     });
+    simutex.addCSourceFile(.{ .file = b.path("src/cli_bridge.m"), .flags = objc_flags });
     simutex.linkFramework("Foundation", .{});
     simutex.linkSystemLibrary("objc", .{});
     simutex.link_libc = true;
@@ -35,6 +36,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
+
+    const app = b.addSystemCommand(&.{ "sh", "scripts/build-app.sh" });
+    app.step.dependOn(b.getInstallStep());
+    b.step("app", "Build the native macOS app").dependOn(&app.step);
+
+    const app_tests = b.addSystemCommand(&.{ "sh", "scripts/test-app.sh" });
+    b.step("test-app", "Test native app models and adaptive layout").dependOn(&app_tests.step);
+
+    const integration = b.addSystemCommand(&.{ "python3", "tests/test_cli.py" });
+    b.step("test-integration", "Run CLI lifecycle integration tests").dependOn(&integration.step);
 
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
