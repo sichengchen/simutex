@@ -143,30 +143,50 @@ final class SimulatorTile: NSView {
         name.stringValue = next.name
         sessionOwner.stringValue = next.owner ?? ""; sessionOwner.isHidden = next.owner == nil
         sessionOwner.toolTip = next.owner; sessionOwner.setAccessibilityLabel(next.owner ?? "")
-        toolTip = "\(next.runtimeLabel)\n\(next.owner ?? "Available")\n\(next.description)"
-        ownership.image = NSImage(systemSymbolName: next.owner == nil ? "lock.open" : "lock", accessibilityDescription: next.owner ?? "Available")
-        ownership.contentTintColor = .secondaryLabelColor
-        ownership.toolTip = next.owner ?? "Available"
-        controls.arrangedSubviews.forEach { controls.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let manual = next.owner == AppSettings.manualOwner
-        if manual {
-            controls.addArrangedSubview(controlButton("house", "Home") { [weak self] in self?.display.session?.home() })
-            controls.addArrangedSubview(controlButton("rotate.right", "Rotate") { [weak self] in self?.rotate() })
-            controls.addArrangedSubview(controlButton("arrow.up.left.and.arrow.down.right", "Enlarge") { [weak self] in guard let self else { return }; self.controller?.enlarge(self.device.udid) })
-        }
-        if manual { controls.addArrangedSubview(controlButton("lock.open", "Unlock") { [weak self] in self?.unlock() }) }
+        toolTip = "\(next.runtimeLabel)\n\(next.lockStatus)\n\(next.description)"
+        ownership.image = NSImage(systemSymbolName: next.isLocked ? "lock.fill" : "lock.open", accessibilityDescription: next.lockStatus)
+        ownership.contentTintColor = next.lockedByMe ? .controlAccentColor : (next.isLocked ? .systemOrange : .secondaryLabelColor)
+        ownership.toolTip = next.lockStatus
+        refreshControls()
         if changed { disconnect() }
         if next.running && display.session == nil && !connecting { connect() }
+        if !next.running { spinner.stopAnimation(nil); message.stringValue = "Not booted"; message.toolTip = nil; message.isHidden = false }
         applyFocus(); needsLayout = true
+    }
+    // Driving controls belong only to the lock holder; everyone else gets a
+    // read-only tile plus the means to take the lock.
+    func refreshControls() {
+        controls.arrangedSubviews.forEach { controls.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let mine = device.lockedByMe
+        guard controller?.isInWorkspace(device.udid) == true else {
+            controls.addArrangedSubview(controlButton("plus.circle", "Add to main panel") { [weak self] in guard let self else { return }; self.controller?.addToWorkspace(self.device.udid) })
+            needsLayout = true
+            return
+        }
+        if mine {
+            controls.addArrangedSubview(controlButton("house", "Home") { [weak self] in self?.display.session?.home() })
+            controls.addArrangedSubview(controlButton("rotate.right", "Rotate") { [weak self] in self?.rotate() })
+        }
+        controls.addArrangedSubview(controlButton("arrow.up.left.and.arrow.down.right", "Enlarge") { [weak self] in guard let self else { return }; self.controller?.enlarge(self.device.udid) })
+        if mine {
+            controls.addArrangedSubview(controlButton("lock.open", "Unlock") { [weak self] in self?.unlock() })
+        } else if device.isLocked {
+            controls.addArrangedSubview(controlButton("lock.trianglebadge.exclamationmark", "Take over") { [weak self] in self?.claim() })
+        } else {
+            controls.addArrangedSubview(controlButton("lock", "Lock for my use") { [weak self] in self?.claim() })
+        }
+        controls.addArrangedSubview(controlButton("minus.circle", "Remove from main panel") { [weak self] in guard let self else { return }; self.controller?.removeFromWorkspace(self.device.udid) })
+        needsLayout = true
     }
     func setLarge(_ large: Bool) { self.large = large; name.font = .systemFont(ofSize: large ? 13 : 11, weight: .medium); needsLayout = true; display.needsDisplay = true }
     func applyFocus() {
-        let manual = device.owner == AppSettings.manualOwner, focused = controller?.focused == device.udid
+        let mine = device.lockedByMe, focused = controller?.focused == device.udid
         display.framesPerSecond = large ? (focused ? 60 : 30) : 5
-        display.interactive = manual && large && display.session != nil
-        layer?.borderWidth = focused && manual && large ? 2 : 0.5
-        layer?.borderColor = (focused && manual && large ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
-        controls.isHidden = !large || !(hovered || focused)
+        display.interactive = mine && large && display.session != nil
+        layer?.borderWidth = focused && mine && large ? 2 : 0.5
+        layer?.borderColor = (focused && mine && large ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+        // Rail tiles reveal their add control on hover; main-panel tiles also show it when focused.
+        controls.isHidden = controls.arrangedSubviews.isEmpty || !(hovered || (large && focused))
         controls.alphaValue = controls.isHidden ? 0 : 1
     }
     func showActions() {
@@ -177,10 +197,16 @@ final class SimulatorTile: NSView {
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             item.target = self; item.representedObject = action; menu.addItem(item)
         }
-        if device.owner == AppSettings.manualOwner {
-            add("Unlock", "lock.open", "unlock")
-            if !large { add("Show in workspace", "arrow.up.left.and.arrow.down.right", "show") }
-        } else { add(device.owner == nil ? "Use manually" : "Take over…", "lock", "claim") }
+        if device.lockedByMe { add("Unlock", "lock.open", "unlock") }
+        else if device.isLocked { add("Take over…", "lock.trianglebadge.exclamationmark", "claim") }
+        else { add("Lock for my use", "lock", "claim") }
+        menu.addItem(.separator())
+        if controller?.isInWorkspace(device.udid) == true {
+            if !large { add("Show in main panel", "arrow.up.left.and.arrow.down.right", "show") }
+            add("Remove from main panel", "minus.circle", "remove")
+        } else {
+            add("Add to main panel", "plus.circle", "add")
+        }
         menu.addItem(.separator())
         add("Copy agent instructions", "doc.on.doc", "copy")
         add("Edit description…", "text.alignleft", "description")
@@ -195,6 +221,8 @@ final class SimulatorTile: NSView {
         case "unlock": unlock()
         case "claim": claim()
         case "show": controller?.enlarge(device.udid); controller?.focus(device.udid)
+        case "add": controller?.addToWorkspace(device.udid)
+        case "remove": controller?.removeFromWorkspace(device.udid)
         case "copy": NSPasteboard.general.clearContents(); NSPasteboard.general.setString(instructions(for: device), forType: .string)
         default: controller?.inspect(device.udid, section: item.representedObject as? String ?? "details")
         }
@@ -246,8 +274,7 @@ final class SimulatorTile: NSView {
             self?.spinner.stopAnimation(nil); self?.setControlsEnabled(true)
             switch result {
             case .success:
-                controller?.expanded = nil; AppSettings.defaults.removeObject(forKey: "expanded")
-                controller?.focus(udid); controller?.layoutTiles()
+                controller?.addToWorkspace(udid)
                 if self?.device.running == true { return }
                 controller?.cli.simctl(["boot", udid]) { result in
                     if case .failure(let error) = result, !(self?.device.running ?? false) { controller?.showError(error.localizedDescription) }
@@ -287,6 +314,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     var tiles = [String: SimulatorTile]()
     var focused = AppSettings.defaults.string(forKey: "focused")
     var expanded = AppSettings.defaults.string(forKey: "expanded")
+    var panelIDs = AppSettings.workspace
     private let workspace = WorkspaceView()
     private let canvas = NSView()
     private let previews = NSScrollView()
@@ -307,7 +335,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         window.toolbar = toolbar
         configureMenu()
         window.contentView = workspace
-        emptyButton = ActionButton("Open simulator") { [weak self] in self?.showPicker() }
+        emptyButton = ActionButton("Add simulator") { [weak self] in self?.showPicker() }
         emptyButton.bezelStyle = .rounded; emptyButton.controlSize = .large
         workspace.wantsLayer = true; workspace.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         rail.wantsLayer = true; rail.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -354,7 +382,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         for id in Array(tiles.keys) where !ids.contains(id) { tiles[id]?.disconnect(); tiles.removeValue(forKey: id) }
         for device in devices {
             if let tile = tiles[device.udid] { tile.update(device) }
-            else if device.running || device.owner == AppSettings.manualOwner { tiles[device.udid] = SimulatorTile(device: device, controller: self) }
+            else if device.running || panelIDs.contains(device.udid) { tiles[device.udid] = SimulatorTile(device: device, controller: self) }
         }
         errorBanner.isHidden = true
         window.contentView?.layoutSubtreeIfNeeded()
@@ -364,12 +392,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         guard emptyButton != nil else { return }
         let safeTop = window.contentLayoutRect.height
         let width = workspace.bounds.width
-        let manual = devices.filter { $0.owner == AppSettings.manualOwner }
-        var shown = manual.filter { expanded == nil || $0.udid == expanded }
-        if shown.isEmpty && !manual.isEmpty { expanded = nil; shown = manual }
-        let shownIDs = Set(shown.map(\.udid))
-        let small = devices.filter { $0.running && !shownIDs.contains($0.udid) }
-        let railWidth: CGFloat = previewVisible && !small.isEmpty ? (width >= 1100 && small.count > 1 ? 320 : 180) : 0
+        let members = WorkspaceSelection.resolved(panelIDs, available: devices)
+        var shown = members.filter { expanded == nil || $0.udid == expanded }
+        if shown.isEmpty && !members.isEmpty { expanded = nil; shown = members }
+        // The rail offers what is not already in the main panel, so members stay
+        // out of it even while one of them is expanded.
+        let memberIDs = Set(members.map(\.udid))
+        let small = devices.filter { $0.running && !memberIDs.contains($0.udid) }
+        let railWidth: CGFloat = previewVisible && !small.isEmpty ? 200 : 0
         rail.isHidden = railWidth == 0
         rail.frame = NSRect(x: width-railWidth, y: 0, width: railWidth, height: safeTop)
         previews.frame = NSRect(x: 12, y: 12, width: max(0,railWidth-24), height: max(0,safeTop-24))
@@ -384,19 +414,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
             if tile.superview !== canvas { tile.removeFromSuperview(); canvas.addSubview(tile) }
             tile.frame = frames[index]; tile.isHidden = false; tile.setLarge(true); tile.applyFocus()
         }
-        let columns = railWidth >= 300 ? 2 : 1
-        let contentWidth = max(0, previews.contentSize.width)
-        let cellWidth = max(0, (contentWidth-CGFloat(columns-1)*12)/CGFloat(columns))
+        let cellWidth = max(0, previews.contentSize.width)
         var previewFrames = [NSRect](), y: CGFloat = 0
-        for start in stride(from: 0, to: small.count, by: columns) {
-            let row = Array(small[start..<min(start+columns,small.count)])
-            let heights = row.map { (cellWidth-8)/max(0.3,tiles[$0.udid]?.display.aspectRatio ?? 0.46)+58 }
-            let height = heights.max() ?? 0
-            for (column,h) in heights.enumerated() { previewFrames.append(NSRect(x: CGFloat(column)*(cellWidth+12), y: y, width: cellWidth, height: h)) }
+        for device in small {
+            let height = (cellWidth-8)/max(0.3,tiles[device.udid]?.display.aspectRatio ?? 0.46)+58
+            previewFrames.append(NSRect(x: 0, y: y, width: cellWidth, height: height))
             y += height+16
         }
         let documentHeight = max(previews.contentSize.height,y)
-        previewDocument.frame = NSRect(x:0,y:0,width:contentWidth,height:documentHeight)
+        previewDocument.frame = NSRect(x:0,y:0,width:cellWidth,height:documentHeight)
         for (index,device) in small.enumerated() {
             guard let tile = tiles[device.udid] else { continue }
             if tile.superview !== previewDocument { tile.removeFromSuperview(); previewDocument.addSubview(tile) }
@@ -418,16 +444,35 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     func showPicker() {
         let menu = NSMenu()
         for device in devices {
+            let member = isInWorkspace(device.udid)
             let item = NSMenuItem(title: "\(device.name) (\(device.runtimeLabel))", action: #selector(pickDevice(_:)), keyEquivalent: "")
-            item.image = NSImage(systemSymbolName: device.owner == nil ? "iphone" : "lock", accessibilityDescription: device.owner ?? "Available")
-            item.toolTip = "\(device.state)\n\(device.owner ?? "Available")\n\(device.description)"
+            item.image = NSImage(systemSymbolName: device.isLocked ? "lock.fill" : "iphone", accessibilityDescription: device.lockStatus)
+            item.toolTip = "\(device.state)\n\(device.lockStatus)\n\(device.description)"
+            // Already-added devices stay listed but inert, so the panel's contents stay legible.
+            item.state = member ? .on : .off
+            item.isEnabled = !member
             item.target = self; item.representedObject = device.udid; menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: 24, y: window.contentView!.bounds.height - 70), in: window.contentView)
     }
     @objc func pickDevice(_ item: NSMenuItem) {
-        guard let udid = item.representedObject as? String, let device = devices.first(where: { $0.udid == udid }) else { return }
-        if tiles[udid] == nil { tiles[udid] = SimulatorTile(device: device, controller: self) }; tiles[udid]?.claim()
+        guard let udid = item.representedObject as? String else { return }
+        addToWorkspace(udid)
+    }
+    func isInWorkspace(_ udid: String) -> Bool { panelIDs.contains(udid) }
+    func addToWorkspace(_ udid: String) {
+        guard let device = devices.first(where: { $0.udid == udid }) else { return }
+        panelIDs = WorkspaceSelection.adding(udid, to: panelIDs)
+        AppSettings.workspace = panelIDs
+        if tiles[udid] == nil { tiles[udid] = SimulatorTile(device: device, controller: self) }
+        expanded = nil; AppSettings.defaults.removeObject(forKey: "expanded")
+        focus(udid); tiles.values.forEach { $0.refreshControls() }; layoutTiles()
+    }
+    func removeFromWorkspace(_ udid: String) {
+        panelIDs = WorkspaceSelection.removing(udid, from: panelIDs)
+        AppSettings.workspace = panelIDs
+        if expanded == udid { expanded = nil; AppSettings.defaults.removeObject(forKey: "expanded") }
+        tiles.values.forEach { $0.refreshControls() }; layoutTiles()
     }
     @objc func pasteToSimulator() {
         guard let focused, let tile = tiles[focused], tile.device.owner == AppSettings.manualOwner, tile.display.interactive, let text = NSPasteboard.general.string(forType: .string) else { return }

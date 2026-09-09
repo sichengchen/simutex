@@ -24,6 +24,35 @@ struct AppModelTests {
         let text=instructions(for:inventory.devices[0])
         precondition(text.contains("Checkout only") && text.contains("simutex claim 'SIM-1'"))
         precondition(shellQuote("a'b") == "'a'\\''b'")
+
+        // Main-panel membership: explicit, de-duplicated, order-preserving.
+        var selection = [String]()
+        selection = WorkspaceSelection.adding("SIM-2", to: selection)
+        selection = WorkspaceSelection.adding("SIM-1", to: selection)
+        selection = WorkspaceSelection.adding("SIM-2", to: selection)
+        precondition(selection == ["SIM-2", "SIM-1"])
+        precondition(WorkspaceSelection.removing("SIM-2", from: selection) == ["SIM-1"])
+        precondition(WorkspaceSelection.removing("absent", from: selection) == selection)
+
+        func device(_ udid: String, owner: String?) -> SimulatorDevice {
+            let json = "{\"udid\":\"\(udid)\",\"name\":\"n\",\"runtime\":\"r\",\"state\":\"Booted\",\"owner\":\(owner.map { "\"\($0)\"" } ?? "null"),\"description\":\"\"}"
+            return try! JSONDecoder().decode(SimulatorDevice.self, from: Data(json.utf8))
+        }
+        let agentOwned = device("SIM-1", owner: "agent:tests")
+        let free = device("SIM-2", owner: nil)
+        let mine = device("SIM-3", owner: AppSettings.manualOwner)
+        // Selection order wins over inventory order, and vanished devices drop out.
+        let resolved = WorkspaceSelection.resolved(["SIM-3", "SIM-1", "gone"], available: [free, agentOwned, mine])
+        precondition(resolved.map(\.udid) == ["SIM-3", "SIM-1"])
+        precondition(WorkspaceSelection.resolved([], available: [free]).isEmpty)
+
+        // Agent-held and unlocked simulators are viewable but not usable.
+        precondition(agentOwned.isLocked && agentOwned.viewOnly && !agentOwned.lockedByMe)
+        precondition(!free.isLocked && free.viewOnly)
+        precondition(mine.lockedByMe && !mine.viewOnly && mine.isLocked)
+        precondition(agentOwned.lockStatus.contains("view only"))
+        precondition(mine.lockStatus == "Locked by you")
+        precondition(free.lockStatus.contains("Available"))
         print("App models: layout, inventory, and agent instructions passed")
     }
 }

@@ -14,6 +14,19 @@ struct SimulatorDevice: Decodable, Equatable {
 }
 struct Inventory: Decodable { let devices: [SimulatorDevice] }
 
+extension SimulatorDevice {
+    var isLocked: Bool { owner != nil }
+    func isOwned(by candidate: String) -> Bool { owner == candidate }
+    var lockedByMe: Bool { isOwned(by: AppSettings.manualOwner) }
+    // Only the holder of the lock may drive a simulator; everyone else watches.
+    var viewOnly: Bool { !lockedByMe }
+    var lockStatus: String {
+        if lockedByMe { return "Locked by you" }
+        if let owner { return "\(owner) - view only" }
+        return "Available - lock to use"
+    }
+}
+
 func shellQuote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 func instructions(for device: SimulatorDevice) -> String {
     """
@@ -40,6 +53,11 @@ struct AppSettings {
             if FileManager.default.fileExists(atPath: path) { return path }
         }
         return "/Library/Developer/CommandLineTools"
+    }
+    // Main-panel membership is chosen by the user, not implied by ownership.
+    static var workspace: [String] {
+        get { defaults.stringArray(forKey: "workspace") ?? [] }
+        set { defaults.set(newValue, forKey: "workspace") }
     }
     static func lockPath(_ udid: String) -> String {
         let env = environment
@@ -137,6 +155,20 @@ private final class DataBox: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     var value: Data { get { lock.lock(); defer { lock.unlock() }; return data } set { lock.lock(); defer { lock.unlock() }; data = newValue } }
+}
+
+struct WorkspaceSelection {
+    static func adding(_ udid: String, to current: [String]) -> [String] {
+        current.contains(udid) ? current : current + [udid]
+    }
+    static func removing(_ udid: String, from current: [String]) -> [String] {
+        current.filter { $0 != udid }
+    }
+    // Preserve the user's ordering; inventory order is not stable across refreshes,
+    // and drop members that have disappeared from the inventory.
+    static func resolved(_ current: [String], available: [SimulatorDevice]) -> [SimulatorDevice] {
+        current.compactMap { udid in available.first { $0.udid == udid } }
+    }
 }
 
 struct WorkspaceLayout {
