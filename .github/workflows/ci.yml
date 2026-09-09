@@ -24,3 +24,12 @@ jobs:
 
       - name: Build release
         run: zig build -Doptimize=ReleaseSafe
+
+      - name: CLI integration tests
+        run: zig build test-integration
+
+      - name: Build desktop app
+        run: zig build app -Doptimize=ReleaseSafe
+
+      - name: App model tests
+        run: zig build test-app

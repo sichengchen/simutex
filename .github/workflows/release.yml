@@ -67,11 +67,18 @@ jobs:
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Build desktop app
+        run: |
+          zig build app -Doptimize=ReleaseSafe
+          ditto -c -k --sequesterRsrc --keepParent zig-out/Simutex.app "dist/Simutex-${{ steps.version.outputs.version }}-macos-arm64.zip"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          files: dist/simutex-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+          files: |
+            dist/simutex-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            dist/Simutex-${{ steps.version.outputs.version }}-macos-arm64.zip
           generate_release_notes: true
 
       - name: Update Homebrew tap

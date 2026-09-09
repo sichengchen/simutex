@@ -7,24 +7,31 @@ const usage =
     \\simutex - coordinate exclusive access to local iOS simulators
     \\
     \\Usage:
-    \\  simutex list
+    \\  simutex list [--json]
     \\  simutex monitor
     \\  simutex claim [UDID] [--owner OWNER]
-    \\  simutex status UDID
+    \\  simutex status UDID [--json]
     \\  simutex release UDID [--owner OWNER]
+    \\  simutex describe UDID DESCRIPTION
+    \\  simutex watch --json
+    \\  simutex takeover UDID --owner OWNER --expected-owner OWNER
+    \\  simutex hooks show UDID [--json] [--hooks FILE]
+    \\  simutex hooks set UDID --event pre-claim|post-claim --config FILE
+    \\  simutex hooks disable|inherit UDID --event pre-claim|post-claim
     \\  simutex reset
     \\  simutex init [--all] [--dry-run]
     \\  simutex version
     \\
+    \\Claim/takeover hook options: --hooks FILE, --pre-claim EXECUTABLE,
+    \\  --post-claim EXECUTABLE, --no-pre-claim, --no-post-claim.
+    \\New owners: manual:<username> or agent:<purpose>.
+    \\Set SIMUTEX_METADATA_PATH for simulator descriptions and hooks.
+    \\Set SIMUTEX_HOOKS for default hooks (no automatic project discovery).
     \\Set SIMUTEX_AGENT instead of passing --owner on every command.
     \\Set SIMUTEX_STATE_DIR to override the shared lock directory.
     \\
 ;
 
-const Options = struct {
-    positional: ?[]const u8 = null,
-    owner: ?[]const u8 = null,
-};
 
 pub fn main(init: std.process.Init) void {
     var stderr_buffer: [1024]u8 = undefined;
@@ -68,185 +75,24 @@ fn run(init: std.process.Init) !void {
         );
     }
 
-    const options = try parseOptions(args[2..]);
-    const state_path = try statePath(allocator, init.environ_map);
-    var state_dir = try simutex.openStateDir(init.io, state_path);
-    defer state_dir.close(init.io);
-
-    if (std.mem.eql(u8, command, "list") or std.mem.eql(u8, command, "available")) {
-        if (options.positional != null or options.owner != null) return error.InvalidArguments;
-        return list(allocator, init.io, state_dir, stdout);
-    }
     if (std.mem.eql(u8, command, "monitor")) {
-        if (options.positional != null or options.owner != null) return error.InvalidArguments;
+        if (args.len != 2) return error.InvalidArguments;
+        var state_dir = try simutex.openStateDir(init.io, try statePath(allocator, init.environ_map));
+        defer state_dir.close(init.io);
         return monitor.run(allocator, init.io, state_dir, stdout);
     }
-    if (std.mem.eql(u8, command, "reset")) {
-        if (options.positional != null or options.owner != null) return error.InvalidArguments;
-        return resetAll(allocator, init.io, state_dir, stdout);
-    }
-    if (std.mem.eql(u8, command, "claim")) {
-        const owner = options.owner orelse init.environ_map.get("SIMUTEX_AGENT") orelse
-            return error.OwnerRequired;
-        return claimOne(allocator, init.io, state_dir, stdout, options.positional, owner);
-    }
-    if (std.mem.eql(u8, command, "status")) {
-        if (options.positional == null or options.owner != null) return error.InvalidArguments;
-        return status(allocator, init.io, state_dir, stdout, options.positional.?);
-    }
-    if (std.mem.eql(u8, command, "release")) {
-        if (options.positional == null) return error.InvalidArguments;
-        const owner = options.owner orelse init.environ_map.get("SIMUTEX_AGENT") orelse
-            return error.OwnerRequired;
-        return releaseOne(allocator, init.io, state_dir, stdout, options.positional.?, owner);
-    }
-    return error.InvalidArguments;
+    const argv = try allocator.alloc([*:0]const u8, args.len - 1);
+    for (args[1..], 0..) |arg, i| argv[i] = try allocator.dupeZ(u8, arg);
+    const result = simutex_cli_run(@intCast(argv.len), argv.ptr);
+    if (result != 0) std.process.exit(@intCast(result));
 }
 
-fn parseOptions(args: []const []const u8) !Options {
-    var options: Options = .{};
-    var index: usize = 0;
-    while (index < args.len) : (index += 1) {
-        if (std.mem.eql(u8, args[index], "--owner")) {
-            index += 1;
-            if (index >= args.len or options.owner != null) return error.InvalidArguments;
-            options.owner = args[index];
-        } else if (std.mem.startsWith(u8, args[index], "-")) {
-            return error.InvalidArguments;
-        } else {
-            if (options.positional != null) return error.InvalidArguments;
-            options.positional = args[index];
-        }
-    }
-    return options;
-}
+extern fn simutex_cli_run(argc: c_int, argv: [*]const [*:0]const u8) c_int;
 
 fn statePath(allocator: std.mem.Allocator, environ: *std.process.Environ.Map) ![]const u8 {
     if (environ.get("SIMUTEX_STATE_DIR")) |path| return path;
     const temp = environ.get("TMPDIR") orelse "/tmp";
     return std.fs.path.join(allocator, &.{ temp, "simutex" });
-}
-
-fn list(
-    allocator: std.mem.Allocator,
-    io: Io,
-    state_dir: Io.Dir,
-    writer: *Io.Writer,
-) !void {
-    var inventory = try simutex.discover(allocator, io);
-    defer inventory.deinit();
-    for (inventory.devices) |device| {
-        if (try simutex.readOwner(allocator, io, state_dir, device.udid)) |owner| {
-            defer allocator.free(owner);
-            try writer.print("🔒\t{s}\t{s}\t{s}\t{s}\n", .{
-                device.udid, device.state, device.name, owner,
-            });
-        } else {
-            try writer.print("🟢\t{s}\t{s}\t{s}\n", .{
-                device.udid, device.state, device.name,
-            });
-        }
-    }
-}
-
-fn claimOne(
-    allocator: std.mem.Allocator,
-    io: Io,
-    state_dir: Io.Dir,
-    writer: *Io.Writer,
-    requested_udid: ?[]const u8,
-    owner: []const u8,
-) !void {
-    var inventory = try simutex.discover(allocator, io);
-    defer inventory.deinit();
-
-    var found_requested = false;
-    for (inventory.devices) |device| {
-        if (requested_udid) |udid| {
-            if (!std.mem.eql(u8, udid, device.udid)) continue;
-            found_requested = true;
-        }
-
-        const result = try simutex.claim(allocator, io, state_dir, device.udid, owner);
-        defer result.deinit(allocator);
-        switch (result) {
-            .acquired, .already_owned => {
-                try writer.print("{s}\n", .{device.udid});
-                return;
-            },
-            .locked_by => |current_owner| {
-                if (requested_udid != null) {
-                    std.log.err("simulator {s} is locked by {s}", .{ device.udid, current_owner });
-                    return error.SimulatorLocked;
-                }
-            },
-        }
-    }
-    if (requested_udid != null and !found_requested) return error.SimulatorNotFound;
-    return error.NoSimulatorAvailable;
-}
-
-fn status(
-    allocator: std.mem.Allocator,
-    io: Io,
-    state_dir: Io.Dir,
-    writer: *Io.Writer,
-    udid: []const u8,
-) !void {
-    if (try simutex.readOwner(allocator, io, state_dir, udid)) |owner| {
-        defer allocator.free(owner);
-        try writer.print("locked\t{s}\n", .{owner});
-    } else {
-        try writer.writeAll("available\n");
-    }
-}
-
-fn releaseOne(
-    allocator: std.mem.Allocator,
-    io: Io,
-    state_dir: Io.Dir,
-    writer: *Io.Writer,
-    udid: []const u8,
-    owner: []const u8,
-) !void {
-    const result = try simutex.release(allocator, io, state_dir, udid, owner);
-    defer result.deinit(allocator);
-    switch (result) {
-        .released => try writer.writeAll("released\n"),
-        .not_locked => try writer.writeAll("not locked\n"),
-        .owned_by => |current_owner| {
-            std.log.err("simulator {s} is locked by {s}", .{ udid, current_owner });
-            return error.NotLockOwner;
-        },
-    }
-}
-
-fn resetAll(
-    allocator: std.mem.Allocator,
-    io: Io,
-    state_dir: Io.Dir,
-    writer: *Io.Writer,
-) !void {
-    var udids: std.ArrayList([]u8) = .empty;
-    defer {
-        for (udids.items) |udid| allocator.free(udid);
-        udids.deinit(allocator);
-    }
-
-    var iterator = state_dir.iterate();
-    while (try iterator.next(io)) |entry| {
-        const suffix = ".lock";
-        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
-        const udid = entry.name[0 .. entry.name.len - suffix.len];
-        if (udid.len == 0) continue;
-        try udids.append(allocator, try allocator.dupe(u8, udid));
-    }
-
-    var released_count: usize = 0;
-    for (udids.items) |udid| {
-        if (try simutex.forceRelease(allocator, io, state_dir, udid)) released_count += 1;
-    }
-    try writer.print("reset\t{d}\n", .{released_count});
 }
 
 fn messageForError(err: anyerror) []const u8 {

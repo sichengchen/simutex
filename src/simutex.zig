@@ -163,6 +163,14 @@ pub fn openStateDir(io: Io, path: []const u8) !Io.Dir {
     });
 }
 
+extern fn simutex_guard_acquire(directory_fd: c_int) c_int;
+extern fn simutex_guard_release(fd: c_int) void;
+fn mutationGuard(dir: Io.Dir) !c_int {
+    const fd = simutex_guard_acquire(dir.handle);
+    if (fd < 0) return error.LockGuardFailed;
+    return fd;
+}
+
 pub fn claim(
     allocator: std.mem.Allocator,
     io: Io,
@@ -170,11 +178,20 @@ pub fn claim(
     udid: []const u8,
     owner: []const u8,
 ) !Claim {
+    const guard_fd = try mutationGuard(state_dir);
+    defer simutex_guard_release(guard_fd);
     try validateUdid(udid);
     try validateOwner(owner);
     const lock_name = try lockName(allocator, udid);
     defer allocator.free(lock_name);
 
+    if (try readOwner(allocator, io, state_dir, udid)) |existing| {
+        if (std.mem.eql(u8, existing, owner)) { allocator.free(existing); return .already_owned; }
+        return .{ .locked_by = existing };
+    }
+    if (!(std.mem.startsWith(u8, owner, "manual:") and owner.len > 7) and
+        !(std.mem.startsWith(u8, owner, "agent:") and owner.len > 6)) return error.InvalidOwner;
+    for (owner) |byte| if (byte < 32 or byte == 127) { return error.InvalidOwner; };
     state_dir.symLink(io, owner, lock_name, .{}) catch |err| switch (err) {
         error.PathAlreadyExists => {
             const current_owner = (try readOwner(allocator, io, state_dir, udid)) orelse
@@ -197,6 +214,8 @@ pub fn release(
     udid: []const u8,
     owner: []const u8,
 ) !Release {
+    const guard_fd = try mutationGuard(state_dir);
+    defer simutex_guard_release(guard_fd);
     try validateUdid(udid);
     try validateOwner(owner);
     const current_owner = (try readOwner(allocator, io, state_dir, udid)) orelse return .not_locked;
@@ -220,6 +239,9 @@ pub fn forceRelease(
     state_dir: Io.Dir,
     udid: []const u8,
 ) !bool {
+    const guard_fd = try mutationGuard(state_dir);
+    defer simutex_guard_release(guard_fd);
+    try validateUdid(udid);
     const lock_name = try lockName(allocator, udid);
     defer allocator.free(lock_name);
     state_dir.deleteFile(io, lock_name) catch |err| switch (err) {
@@ -295,23 +317,23 @@ test "claim is exclusive, idempotent for its owner, and owner-only to release" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    const first = try claim(allocator, io, tmp.dir, "SIM-1", "agent-a");
+    const first = try claim(allocator, io, tmp.dir, "SIM-1", "agent:a");
     defer first.deinit(allocator);
     try std.testing.expect(first == .acquired);
 
-    const same = try claim(allocator, io, tmp.dir, "SIM-1", "agent-a");
+    const same = try claim(allocator, io, tmp.dir, "SIM-1", "agent:a");
     defer same.deinit(allocator);
     try std.testing.expect(same == .already_owned);
 
-    const other = try claim(allocator, io, tmp.dir, "SIM-1", "agent-b");
+    const other = try claim(allocator, io, tmp.dir, "SIM-1", "agent:b");
     defer other.deinit(allocator);
-    try std.testing.expectEqualStrings("agent-a", other.locked_by);
+    try std.testing.expectEqualStrings("agent:a", other.locked_by);
 
-    const denied = try release(allocator, io, tmp.dir, "SIM-1", "agent-b");
+    const denied = try release(allocator, io, tmp.dir, "SIM-1", "agent:b");
     defer denied.deinit(allocator);
-    try std.testing.expectEqualStrings("agent-a", denied.owned_by);
+    try std.testing.expectEqualStrings("agent:a", denied.owned_by);
 
-    const released = try release(allocator, io, tmp.dir, "SIM-1", "agent-a");
+    const released = try release(allocator, io, tmp.dir, "SIM-1", "agent:a");
     defer released.deinit(allocator);
     try std.testing.expect(released == .released);
     try std.testing.expect((try readOwner(allocator, io, tmp.dir, "SIM-1")) == null);
@@ -323,7 +345,7 @@ test "force release clears a lock regardless of owner" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    const acquired = try claim(allocator, io, tmp.dir, "SIM-1", "agent-a");
+    const acquired = try claim(allocator, io, tmp.dir, "SIM-1", "agent:a");
     defer acquired.deinit(allocator);
     try std.testing.expect(try forceRelease(allocator, io, tmp.dir, "SIM-1"));
     try std.testing.expect((try readOwner(allocator, io, tmp.dir, "SIM-1")) == null);

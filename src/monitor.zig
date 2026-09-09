@@ -11,11 +11,22 @@ const enter_screen = "\x1b[?1049h\x1b[?25l";
 const leave_screen = "\x1b[0m\x1b[?25h\x1b[?1049l";
 const clear_screen = "\x1b[H\x1b[2J";
 
+extern fn simutex_metadata_directory_fd() c_int;
+extern fn simutex_copy_description(udid: [*:0]const u8) ?[*:0]u8;
+fn descriptionFor(allocator: std.mem.Allocator, udid: []const u8) ![]const u8 {
+    const z = try allocator.dupeZ(u8, udid);
+    defer allocator.free(z);
+    const result = simutex_copy_description(z.ptr) orelse return error.OutOfMemory;
+    defer std.c.free(result);
+    return allocator.dupe(u8, std.mem.span(result));
+}
+
 pub const Row = struct {
     name: []const u8,
     udid: []const u8,
     state: []const u8,
     owner: ?[]const u8,
+    description: []const u8 = "",
 };
 
 const TerminalSize = struct {
@@ -33,11 +44,13 @@ const EventKind = enum(usize) {
     core_simulator = 2,
     lock_directory = 3,
     terminal_resize = 4,
+    metadata = 5,
 };
 
 const EventWaiter = struct {
     kqueue_fd: std.posix.fd_t,
     has_core_simulator: bool,
+    metadata_fd: c_int,
 
     fn init(state_dir_fd: std.posix.fd_t, core_simulator_fd: ?std.posix.fd_t) !EventWaiter {
         const kqueue_fd = std.c.kqueue();
@@ -48,7 +61,7 @@ const EventWaiter = struct {
         }
         errdefer _ = std.posix.system.close(kqueue_fd);
 
-        var changes: [4]std.posix.Kevent = undefined;
+        var changes: [5]std.posix.Kevent = undefined;
         var change_count: usize = 0;
         const flags = std.c.EV.ADD | std.c.EV.ENABLE | std.c.EV.CLEAR;
 
@@ -94,15 +107,23 @@ const EventWaiter = struct {
         };
         change_count += 1;
 
+        const metadata_fd = simutex_metadata_directory_fd();
+        errdefer { if (metadata_fd >= 0) { _ = std.posix.system.close(metadata_fd); } }
+        if (metadata_fd >= 0) {
+            changes[change_count] = .{ .ident = @intCast(metadata_fd), .filter = std.c.EVFILT.VNODE, .flags = flags, .fflags = std.c.NOTE.WRITE | std.c.NOTE.RENAME | std.c.NOTE.DELETE, .data = 0, .udata = @intFromEnum(EventKind.metadata) };
+            change_count += 1;
+        }
         _ = try std.Io.Kqueue.kevent(kqueue_fd, changes[0..change_count], &.{}, null);
         return .{
             .kqueue_fd = kqueue_fd,
             .has_core_simulator = core_simulator_fd != null,
+            .metadata_fd = metadata_fd,
         };
     }
 
     fn deinit(self: *EventWaiter) void {
         _ = std.posix.system.close(self.kqueue_fd);
+        if (self.metadata_fd >= 0) _ = std.posix.system.close(self.metadata_fd);
         self.* = undefined;
     }
 
@@ -137,7 +158,7 @@ const EventWaiter = struct {
                         if (connection) |core_simulator| core_simulator.drainEvents();
                         should_refresh = true;
                     },
-                    .lock_directory, .terminal_resize => should_refresh = true,
+                    .lock_directory, .terminal_resize, .metadata => should_refresh = true,
                 }
             }
             if (should_refresh) return .refresh;
@@ -235,7 +256,7 @@ fn refresh(
 
     var rows: std.ArrayList(Row) = .empty;
     defer {
-        for (rows.items) |row| if (row.owner) |owner| allocator.free(owner);
+        for (rows.items) |row| { if (row.owner) |owner| allocator.free(owner); allocator.free(row.description); }
         rows.deinit(allocator);
     }
 
@@ -245,6 +266,7 @@ fn refresh(
             .udid = device.udid,
             .state = device.state,
             .owner = try simutex.readOwner(allocator, io, state_dir, device.udid),
+            .description = try descriptionFor(allocator, device.udid),
         });
     }
 
@@ -298,7 +320,14 @@ fn render(writer: *Io.Writer, size: TerminalSize, rows: []const Row) !void {
 
     // Header, summary, table heading, overflow marker, spacer, and footer.
     const reserved_rows = 7;
-    const visible_count = @min(rows.len, size.rows -| reserved_rows);
+    var visible_count: usize = 0;
+    var remaining = size.rows -| reserved_rows;
+    for (rows) |row| {
+        const height: usize = if (row.description.len > 0) 2 else 1;
+        if (remaining < height) break;
+        remaining -= height;
+        visible_count += 1;
+    }
     if (size.columns >= 100) {
         try renderWide(writer, size.columns, rows[0..visible_count]);
     } else if (size.columns >= 60) {
@@ -331,6 +360,7 @@ fn renderWide(writer: *Io.Writer, columns: usize, rows: []const Row) !void {
         try writeCell(writer, row.owner orelse "—", 18);
         try writeClipped(writer, row.udid, 36);
         try endLine(writer);
+        if (row.description.len > 0) { try writer.writeAll("  "); try writeClipped(writer, row.description, columns -| 2); try endLine(writer); }
     }
 }
 
@@ -348,6 +378,7 @@ fn renderMedium(writer: *Io.Writer, columns: usize, rows: []const Row) !void {
         try writeCell(writer, row.state, 11);
         try writeClipped(writer, row.owner orelse "—", 18);
         try endLine(writer);
+        if (row.description.len > 0) { try writer.writeAll("  "); try writeClipped(writer, row.description, columns -| 2); try endLine(writer); }
     }
 }
 
@@ -358,6 +389,7 @@ fn renderNarrow(writer: *Io.Writer, columns: usize, rows: []const Row) !void {
         try writeStatus(writer, row.owner != null, 10);
         try writeClipped(writer, row.name, columns -| 10);
         try endLine(writer);
+        if (row.description.len > 0) { try writer.writeAll("  "); try writeClipped(writer, row.description, columns -| 2); try endLine(writer); }
     }
 }
 
