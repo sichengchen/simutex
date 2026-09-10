@@ -223,6 +223,8 @@ Open `zig-out/Simutex.app`. The app targets Apple Silicon and macOS 15+, and its
 bundle identifier is `com.scchan.simutex`. The standalone CLI does not depend on
 AppKit, Metal, or the application bundle.
 
+The toolbar’s Devices menu opens a simulator for your use or views an agent-owned
+simulator without taking over its claim.
 The toolbar’s Layout button offers **Auto Layout** and **Manual Layout**. Auto Layout fits all
 claimed simulators (yours and agents') plus pinned simulators in the main panel.
 Use a simulator's Pin/Unpin action to keep it visible even when

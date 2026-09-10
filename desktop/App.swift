@@ -220,12 +220,18 @@ final class SimulatorTile: NSView {
         addMembershipControl()
         needsLayout = true
     }
-    func setLarge(_ large: Bool) { self.large = large; name.font = .systemFont(ofSize: large ? 13 : 11, weight: .medium); needsLayout = true; display.needsDisplay = true }
+    func setLarge(_ large: Bool) {
+        self.large = large
+        layer?.cornerRadius = large ? 16 : 0
+        layer?.backgroundColor = large ? NSColor.controlBackgroundColor.cgColor : NSColor.clear.cgColor
+        name.font = .systemFont(ofSize: large ? 13 : 11, weight: .medium)
+        needsLayout = true; display.needsDisplay = true
+    }
     func applyFocus() {
         let mine = device.lockedByMe, focused = controller?.focused == device.udid
         display.framesPerSecond = large ? (focused ? 60 : 30) : 5
         display.interactive = mine && large && display.session != nil
-        layer?.borderWidth = focused && mine && large ? 2 : 0.5
+        layer?.borderWidth = large ? (focused && mine ? 2 : 0.5) : 0
         layer?.borderColor = (focused && mine && large ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
         // Keep each simulator’s actions together and accessible without hovering.
         controlsBackground.isHidden = controls.arrangedSubviews.isEmpty
@@ -448,13 +454,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         }
         cli.startWatching(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("add"), .init("grid"), .init("previews"), .init("settings")] }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("devices"), .init("add"), .init("grid"), .init("previews"), .init("settings")] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace] + (layoutMode == .manual ? [.init("add")] : []) + [.init("grid"), .init("previews"), .init("settings")]
+        [.flexibleSpace, .init("devices")] + (layoutMode == .manual ? [.init("add")] : []) + [.init("grid"), .init("previews"), .init("settings")]
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: id)
-        let specs: [String: (String, String)] = ["add":("plus","Add Simulator"),"grid":("square.grid.2x2","Layout"),"previews":("sidebar.right","Previews"),"settings":("gearshape","Settings")]
+        let specs: [String: (String, String)] = ["devices":("iphone","Devices"),"add":("plus","Add Simulator"),"grid":("square.grid.2x2","Layout"),"previews":("sidebar.right","Previews"),"settings":("gearshape","Settings")]
         guard let spec = specs[id.rawValue] else { return nil }
         item.label = spec.1; item.toolTip = spec.1
         item.image = NSImage(systemSymbolName: spec.0, accessibilityDescription: spec.1)
@@ -469,7 +475,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
             if mode == .auto, let index = toolbar.items.firstIndex(where: { $0.itemIdentifier.rawValue == "add" }) {
                 toolbar.removeItem(at: index)
             } else if mode == .manual && !toolbar.items.contains(where: { $0.itemIdentifier.rawValue == "add" }) {
-                toolbar.insertItem(withItemIdentifier: .init("add"), at: 1)
+                toolbar.insertItem(withItemIdentifier: .init("add"), at: 2)
             }
         }
         receive(devices)
@@ -494,6 +500,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     }
     @objc private func toolbarAction(_ item: NSToolbarItem) {
         switch item.itemIdentifier.rawValue {
+        case "devices": showDevices()
         case "add": showPicker()
         case "grid": showLayoutMenu()
         case "previews": togglePreviews()
@@ -588,6 +595,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     }
     func showSettings() { settingsController = SettingsController(app: self); settingsController?.showWindow(nil) }
     func settingsChanged() { tiles.values.forEach { $0.disconnect() }; cli.startWatching() }
+    func showDevices() {
+        let menu = NSMenu()
+        for device in devices {
+            let action = device.isLocked && !device.lockedByMe ? "View" : "Open for my use"
+            let item = NSMenuItem(title: "\(device.name) (\(device.runtimeLabel)) — \(action)", action: #selector(openDevice(_:)), keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: device.isLocked ? "lock.fill" : "iphone", accessibilityDescription: device.lockStatus)
+            item.toolTip = "\(device.state)\n\(device.lockStatus)"
+            item.target = self; item.representedObject = device.udid
+            menu.addItem(item)
+        }
+        if devices.isEmpty {
+            let item = NSMenuItem(title: "No simulators available", action: nil, keyEquivalent: "")
+            item.isEnabled = false; menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: window.mouseLocationOutsideOfEventStream, in: workspace)
+    }
+    @objc private func openDevice(_ item: NSMenuItem) {
+        guard let udid = item.representedObject as? String, let device = devices.first(where: { $0.udid == udid }) else { return }
+        if tiles[udid] == nil { tiles[udid] = SimulatorTile(device: device, controller: self) }
+        if layoutMode == .manual { addToWorkspace(udid) }
+        focus(udid)
+        if !device.isLocked || device.lockedByMe { tiles[udid]?.claim() }
+    }
     func showPicker() {
         guard layoutMode == .manual else { return }
         let menu = NSMenu()
