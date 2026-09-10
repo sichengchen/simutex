@@ -43,6 +43,11 @@ func instructions(for device: SimulatorDevice) -> String {
     """
 }
 
+enum LayoutMode: String, CaseIterable {
+    case auto = "Auto Layout"
+    case manual = "Manual Layout"
+}
+
 struct AppSettings {
     static let defaults = UserDefaults.standard
     static var manualOwner: String { "manual:" + NSUserName() }
@@ -54,7 +59,15 @@ struct AppSettings {
         }
         return "/Library/Developer/CommandLineTools"
     }
-    // Main-panel membership is chosen by the user, not implied by ownership.
+    static var layoutMode: LayoutMode {
+        get { defaults.string(forKey: "layoutMode").flatMap(LayoutMode.init(rawValue:)) ?? .manual }
+        set { defaults.set(newValue.rawValue, forKey: "layoutMode") }
+    }
+    static var pinnedSimulators: [String] {
+        get { defaults.stringArray(forKey: "pinnedSimulators") ?? [] }
+        set { defaults.set(newValue, forKey: "pinnedSimulators") }
+    }
+    // Preserve manual membership independently of automatic layout and pins.
     static var workspace: [String] {
         get { defaults.stringArray(forKey: "workspace") ?? [] }
         set { defaults.set(newValue, forKey: "workspace") }
@@ -158,6 +171,12 @@ private final class DataBox: @unchecked Sendable {
 }
 
 struct WorkspaceSelection {
+    static func members(mode: LayoutMode, manual: [String], pinned: [String], available: [SimulatorDevice]) -> [SimulatorDevice] {
+        if mode == .manual { return resolved(manual, available: available) }
+        let pins = Set(pinned)
+        return available.filter { $0.isLocked || pins.contains($0.udid) }.sorted { $0.udid < $1.udid }
+    }
+
     static func adding(_ udid: String, to current: [String]) -> [String] {
         current.contains(udid) ? current : current + [udid]
     }

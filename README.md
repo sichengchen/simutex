@@ -223,8 +223,13 @@ Open `zig-out/Simutex.app`. The app targets Apple Silicon and macOS 15+, and its
 bundle identifier is `com.scchan.simutex`. The standalone CLI does not depend on
 AppKit, Metal, or the application bundle.
 
-The workspace fits manually reserved simulators to the window, with a collapsible
-preview rail for other running devices. Locked devices show the exact session
+The toolbar offers **Auto Layout** and **Manual Layout**. Auto Layout fits all
+claimed simulators (yours and agents') plus pinned simulators in the main panel.
+Use the pin picker or a simulator's Pin/Unpin action to keep it visible even when
+unclaimed or shut down. Claimed simulators remain visible when unpinned.
+Manual Layout lets you add, remove, and enlarge simulators as before and is the
+default. The mode, pins, and separate manual selection are saved across launches.
+A collapsible preview rail shows other running devices. Locked devices show the exact session
 owner beneath their name, including legacy owners. Hover or focus a simulator
 for controls below its screen; the header menu opens ownership actions, copied
 agent instructions, descriptions, and hooks. The inspector separates Description,

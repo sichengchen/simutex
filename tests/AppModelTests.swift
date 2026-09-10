@@ -46,6 +46,22 @@ struct AppModelTests {
         precondition(resolved.map(\.udid) == ["SIM-3", "SIM-1"])
         precondition(WorkspaceSelection.resolved([], available: [free]).isEmpty)
 
+        let stopped = SimulatorDevice(udid: "SIM-4", name: "Stopped", runtime: "r", state: "Shutdown", owner: nil, description: "")
+        let all = [free, mine, stopped, agentOwned]
+        func members(_ mode: LayoutMode, pins: [String] = [], inventory: [SimulatorDevice] = all) -> [String] {
+            WorkspaceSelection.members(mode: mode, manual: ["SIM-2"], pinned: pins, available: inventory).map(\.udid)
+        }
+        precondition(members(.auto) == ["SIM-1", "SIM-3"])
+        precondition(members(.auto, pins: ["SIM-1", "SIM-4", "gone"]) == ["SIM-1", "SIM-3", "SIM-4"])
+        precondition(members(.auto, inventory: all.reversed()) == members(.auto))
+        precondition(members(.manual, pins: ["SIM-4"]) == ["SIM-2"])
+        // A released claim leaves the panel unless pinned, regardless of boot state.
+        let released = device("SIM-1", owner: nil)
+        precondition(members(.auto, inventory: [released, free]).isEmpty)
+        precondition(members(.auto, pins: ["SIM-1"], inventory: [released, free]) == ["SIM-1"])
+        precondition(members(.auto, inventory: [SimulatorDevice(udid: "SIM-5", name: "Claimed", runtime: "r", state: "Shutdown", owner: "agent:tests", description: "")]) == ["SIM-5"])
+        precondition(members(.auto, pins: ["SIM-4"], inventory: []).isEmpty)
+
         // Agent-held and unlocked simulators are viewable but not usable.
         precondition(agentOwned.isLocked && agentOwned.viewOnly && !agentOwned.lockedByMe)
         precondition(!free.isLocked && free.viewOnly)

@@ -162,8 +162,20 @@ final class SimulatorTile: NSView {
     func refreshControls() {
         controls.arrangedSubviews.forEach { controls.removeArrangedSubview($0); $0.removeFromSuperview() }
         let mine = device.lockedByMe
+        let automatic = controller?.layoutMode == .auto
+        func addMembershipControl() {
+            let pinned = controller?.isPinned(device.udid) == true
+            controls.addArrangedSubview(controlButton(automatic ? (pinned ? "pin.slash" : "pin") : "minus.circle",
+                automatic ? (pinned ? "Unpin simulator" : "Pin simulator") : "Remove from main panel") { [weak self] in
+                guard let self, let controller = self.controller else { return }
+                if controller.layoutMode == .auto { controller.togglePin(self.device.udid) }
+                else { controller.removeFromWorkspace(self.device.udid) }
+            })
+        }
         guard controller?.isInWorkspace(device.udid) == true else {
-            controls.addArrangedSubview(controlButton("plus.circle", "Add to main panel") { [weak self] in guard let self else { return }; self.controller?.addToWorkspace(self.device.udid) })
+            if automatic { addMembershipControl() } else {
+                controls.addArrangedSubview(controlButton("plus.circle", "Add to main panel") { [weak self] in guard let self else { return }; self.controller?.addToWorkspace(self.device.udid) })
+            }
             needsLayout = true
             return
         }
@@ -171,7 +183,7 @@ final class SimulatorTile: NSView {
             controls.addArrangedSubview(controlButton("house", "Home") { [weak self] in self?.display.session?.home() })
             controls.addArrangedSubview(controlButton("rotate.right", "Rotate") { [weak self] in self?.rotate() })
         }
-        controls.addArrangedSubview(controlButton("arrow.up.left.and.arrow.down.right", "Enlarge") { [weak self] in guard let self else { return }; self.controller?.enlarge(self.device.udid) })
+        if !automatic { controls.addArrangedSubview(controlButton("arrow.up.left.and.arrow.down.right", "Enlarge") { [weak self] in guard let self else { return }; self.controller?.enlarge(self.device.udid) }) }
         if mine {
             controls.addArrangedSubview(controlButton("lock.open", "Unlock") { [weak self] in self?.unlock() })
         } else if device.isLocked {
@@ -179,7 +191,7 @@ final class SimulatorTile: NSView {
         } else {
             controls.addArrangedSubview(controlButton("lock", "Lock for my use") { [weak self] in self?.claim() })
         }
-        controls.addArrangedSubview(controlButton("minus.circle", "Remove from main panel") { [weak self] in guard let self else { return }; self.controller?.removeFromWorkspace(self.device.udid) })
+        addMembershipControl()
         needsLayout = true
     }
     func setLarge(_ large: Bool) { self.large = large; name.font = .systemFont(ofSize: large ? 13 : 11, weight: .medium); needsLayout = true; display.needsDisplay = true }
@@ -205,7 +217,10 @@ final class SimulatorTile: NSView {
         else if device.isLocked { add("Take over…", "lock.trianglebadge.exclamationmark", "claim") }
         else { add("Lock for my use", "lock", "claim") }
         menu.addItem(.separator())
-        if controller?.isInWorkspace(device.udid) == true {
+        if controller?.layoutMode == .auto {
+            let pinned = controller?.isPinned(device.udid) == true
+            add(pinned ? "Unpin simulator" : "Pin simulator", pinned ? "pin.slash" : "pin", "pin")
+        } else if controller?.isInWorkspace(device.udid) == true {
             if !large { add("Show in main panel", "arrow.up.left.and.arrow.down.right", "show") }
             add("Remove from main panel", "minus.circle", "remove")
         } else {
@@ -227,6 +242,7 @@ final class SimulatorTile: NSView {
         case "show": controller?.enlarge(device.udid); controller?.focus(device.udid)
         case "add": controller?.addToWorkspace(device.udid)
         case "remove": controller?.removeFromWorkspace(device.udid)
+        case "pin": controller?.togglePin(device.udid)
         case "copy": NSPasteboard.general.clearContents(); NSPasteboard.general.setString(instructions(for: device), forType: .string)
         default: controller?.inspect(device.udid, section: item.representedObject as? String ?? "details")
         }
@@ -338,6 +354,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     var focused = AppSettings.defaults.string(forKey: "focused")
     var expanded = AppSettings.defaults.string(forKey: "expanded")
     var panelIDs = AppSettings.workspace
+    var layoutMode = AppSettings.layoutMode
+    var pinnedIDs = AppSettings.pinnedSimulators
+    private let modeSelector = NSPopUpButton(frame: .zero, pullsDown: false)
+    var panelMembers: [SimulatorDevice] {
+        WorkspaceSelection.members(mode: layoutMode, manual: panelIDs, pinned: pinnedIDs, available: devices)
+    }
     private let workspace = WorkspaceView()
     private let canvas = NSView()
     private let previews = NSScrollView()
@@ -376,15 +398,41 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         cli.startWatching(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("add"), .init("grid"), .init("previews"), .init("inspector"), .init("settings")] }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("mode"), .init("add"), .init("grid"), .init("previews"), .init("inspector"), .init("settings")] }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: id)
+        if id.rawValue == "mode" {
+            modeSelector.addItems(withTitles: LayoutMode.allCases.map(\.rawValue))
+            modeSelector.selectItem(withTitle: layoutMode.rawValue)
+            modeSelector.target = self; modeSelector.action = #selector(changeLayoutMode)
+            modeSelector.setAccessibilityLabel("Layout mode")
+            item.label = "Layout mode"; item.view = modeSelector
+            return item
+        }
         let specs: [String: (String, String)] = ["add":("plus","Add Simulator"),"grid":("square.grid.2x2","Layout"),"previews":("sidebar.right","Previews"),"inspector":("info.circle","Inspector"),"settings":("gearshape","Settings")]
         guard let spec = specs[id.rawValue] else { return nil }
         item.label = spec.1; item.toolTip = spec.1
         item.image = NSImage(systemSymbolName: spec.0, accessibilityDescription: spec.1)
         item.target = self; item.action = #selector(toolbarAction(_:))
+        item.autovalidates = false
+        if id.rawValue == "grid" { item.isEnabled = layoutMode == .manual }
+        if id.rawValue == "add", layoutMode == .auto {
+            item.label = "Pin Simulator"; item.toolTip = item.label
+            item.image = NSImage(systemSymbolName: "pin", accessibilityDescription: item.label)
+        }
         return item
+    }
+    @objc private func changeLayoutMode() {
+        guard let title = modeSelector.titleOfSelectedItem, let mode = LayoutMode(rawValue: title) else { return }
+        layoutMode = mode; AppSettings.layoutMode = mode
+        for item in window.toolbar?.items ?? [] where ["add", "grid"].contains(item.itemIdentifier.rawValue) {
+            if item.itemIdentifier.rawValue == "grid" { item.isEnabled = mode == .manual }
+            else {
+                item.label = mode == .auto ? "Pin Simulator" : "Add Simulator"; item.toolTip = item.label
+                item.image = NSImage(systemSymbolName: mode == .auto ? "pin" : "plus", accessibilityDescription: item.label)
+            }
+        }
+        receive(devices)
     }
     @objc private func toolbarAction(_ item: NSToolbarItem) {
         switch item.itemIdentifier.rawValue {
@@ -402,10 +450,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     func receive(_ devices: [SimulatorDevice]) {
         self.devices = devices
         let ids = Set(devices.map(\.udid))
+        let memberIDs = Set(panelMembers.map(\.udid))
         for id in Array(tiles.keys) where !ids.contains(id) { tiles[id]?.disconnect(); tiles.removeValue(forKey: id) }
         for device in devices {
             if let tile = tiles[device.udid] { tile.update(device) }
-            else if device.running || panelIDs.contains(device.udid) { tiles[device.udid] = SimulatorTile(device: device, controller: self) }
+            else if device.running || memberIDs.contains(device.udid) { tiles[device.udid] = SimulatorTile(device: device, controller: self) }
         }
         errorBanner.isHidden = true
         window.contentView?.layoutSubtreeIfNeeded()
@@ -415,8 +464,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         guard emptyButton != nil else { return }
         let safeTop = window.contentLayoutRect.height
         let width = workspace.bounds.width
-        let members = WorkspaceSelection.resolved(panelIDs, available: devices)
-        var shown = members.filter { expanded == nil || $0.udid == expanded }
+        let members = panelMembers
+        var shown = members.filter { layoutMode == .auto || expanded == nil || $0.udid == expanded }
         if shown.isEmpty && !members.isEmpty { expanded = nil; shown = members }
         // The rail offers what is not already in the main panel, so members stay
         // out of it even while one of them is expanded.
@@ -427,6 +476,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         rail.frame = NSRect(x: width-railWidth, y: 0, width: railWidth, height: safeTop)
         previews.frame = NSRect(x: 12, y: 12, width: max(0,railWidth-24), height: max(0,safeTop-24))
         canvas.frame = NSRect(x: 20, y: 18, width: max(0,width-railWidth-40), height: max(0,safeTop-36))
+        emptyButton.title = layoutMode == .auto ? "Pin simulator" : "Add simulator"
         emptyButton.isHidden = !shown.isEmpty
         emptyButton.frame = NSRect(x: canvas.frame.midX-80, y: safeTop/2-18, width: 160, height: 36)
         errorBanner.frame = NSRect(x: 24, y: safeTop-28, width: max(0,width-48), height: 20)
@@ -454,7 +504,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     }
 
     func focus(_ udid: String) { focused = udid; AppSettings.defaults.set(udid, forKey: "focused"); tiles.values.forEach { $0.applyFocus() } }
-    func enlarge(_ udid: String) { expanded = expanded == udid ? nil : udid; AppSettings.defaults.set(expanded, forKey: "expanded"); layoutTiles() }
+    func enlarge(_ udid: String) { guard layoutMode == .manual else { return }; expanded = expanded == udid ? nil : udid; AppSettings.defaults.set(expanded, forKey: "expanded"); layoutTiles() }
     func windowDidResize(_ notification: Notification) { layoutTiles() }
     func windowDidResignKey(_ notification: Notification) { tiles.values.forEach { $0.display.cancelInput() } }
     func showError(_ message: String) { let a = NSAlert(); a.messageText = "Simutex"; a.informativeText = message; a.runModal() }
@@ -467,23 +517,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
     func showPicker() {
         let menu = NSMenu()
         for device in devices {
-            let member = isInWorkspace(device.udid)
+            let member = layoutMode == .auto ? isPinned(device.udid) : isInWorkspace(device.udid)
             let item = NSMenuItem(title: "\(device.name) (\(device.runtimeLabel))", action: #selector(pickDevice(_:)), keyEquivalent: "")
             item.image = NSImage(systemSymbolName: device.isLocked ? "lock.fill" : "iphone", accessibilityDescription: device.lockStatus)
             item.toolTip = "\(device.state)\n\(device.lockStatus)\n\(device.description)"
-            // Already-added devices stay listed but inert, so the panel's contents stay legible.
+            // Manual members are inert; automatic pins can be toggled.
             item.state = member ? .on : .off
-            item.isEnabled = !member
+            item.isEnabled = layoutMode == .auto || !member
             item.target = self; item.representedObject = device.udid; menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: 24, y: window.contentView!.bounds.height - 70), in: window.contentView)
     }
     @objc func pickDevice(_ item: NSMenuItem) {
         guard let udid = item.representedObject as? String else { return }
-        addToWorkspace(udid)
+        if layoutMode == .auto { togglePin(udid) } else { addToWorkspace(udid) }
     }
-    func isInWorkspace(_ udid: String) -> Bool { panelIDs.contains(udid) }
+    func isInWorkspace(_ udid: String) -> Bool { panelMembers.contains { $0.udid == udid } }
+    func isPinned(_ udid: String) -> Bool { pinnedIDs.contains(udid) }
+    func togglePin(_ udid: String) {
+        pinnedIDs = isPinned(udid) ? WorkspaceSelection.removing(udid, from: pinnedIDs) : WorkspaceSelection.adding(udid, to: pinnedIDs)
+        AppSettings.pinnedSimulators = pinnedIDs
+        receive(devices)
+    }
     func addToWorkspace(_ udid: String) {
+        guard layoutMode == .manual else { return }
         guard let device = devices.first(where: { $0.udid == udid }) else { return }
         panelIDs = WorkspaceSelection.adding(udid, to: panelIDs)
         AppSettings.workspace = panelIDs
@@ -492,6 +549,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         focus(udid); tiles.values.forEach { $0.refreshControls() }; layoutTiles()
     }
     func removeFromWorkspace(_ udid: String) {
+        guard layoutMode == .manual else { return }
         panelIDs = WorkspaceSelection.removing(udid, from: panelIDs)
         AppSettings.workspace = panelIDs
         if expanded == udid { expanded = nil; AppSettings.defaults.removeObject(forKey: "expanded") }
