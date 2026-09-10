@@ -73,6 +73,7 @@ final class SimulatorTile: NSView {
     private var inputFailures = 0
     private var lastInputFailure = Date.distantPast
     private var recovering = false
+    var headerHeight: CGFloat { device.owner == nil ? 32 : 48 }
     private var large = false
     private var hovered = false
     private var tracking: NSTrackingArea?
@@ -110,17 +111,17 @@ final class SimulatorTile: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func layout() {
         super.layout()
-        let header: CGFloat = 54
+        let header = headerHeight
         let footer: CGFloat = 38
-        let inset: CGFloat = 12
-        let centerY = bounds.height - 20
+        let inset: CGFloat = large ? 12 : 4
+        let centerY = bounds.height - 16
         let titleX: CGFloat = inset + 16 + 8
         let titleHeight = name.intrinsicContentSize.height
         ownership.frame = NSRect(x: inset, y: centerY-8, width: 16, height: 16)
         name.frame = NSRect(x: titleX, y: centerY-titleHeight/2,
                             width: max(0,bounds.width-inset-titleX), height: titleHeight)
         let ownerHeight = sessionOwner.intrinsicContentSize.height
-        sessionOwner.frame = NSRect(x: titleX, y: bounds.height-40-ownerHeight/2,
+        sessionOwner.frame = NSRect(x: titleX, y: bounds.height-34-ownerHeight/2,
                                     width: max(0,bounds.width-inset-titleX), height: ownerHeight)
         display.frame = NSRect(x: 4, y: footer+4, width: max(0,bounds.width-8), height: max(0,bounds.height-header-footer-4))
         let capacity = max(1, Int((bounds.width-8)/36))
@@ -544,7 +545,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         // out of it even while one of them is expanded.
         let memberIDs = Set(members.map(\.udid))
         let small = devices.filter { $0.running && !memberIDs.contains($0.udid) }
-        previews.frame = rail.bounds.insetBy(dx: 12, dy: 12)
+        previews.frame = rail.bounds.insetBy(dx: 4, dy: 4)
         canvas.frame = NSRect(x: 20, y: 18, width: max(0,width-40), height: max(0,safeTop-36))
         emptyButton.title = layoutMode == .auto ? "No claimed or pinned simulators" : "Add simulator"
         emptyButton.isEnabled = layoutMode == .manual
@@ -561,9 +562,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, NS
         let cellWidth = max(0, previews.contentSize.width)
         var previewFrames = [NSRect](), y: CGFloat = 0
         for device in small {
-            let height = (cellWidth-8)/max(0.3,tiles[device.udid]?.display.aspectRatio ?? 0.46)+96
+            let header = tiles[device.udid]?.headerHeight ?? 32
+            let height = max(0,cellWidth-8)/max(0.3,tiles[device.udid]?.display.aspectRatio ?? 0.46)+header+42
             previewFrames.append(NSRect(x: 0, y: y, width: cellWidth, height: height))
-            y += height+16
+            y += height+8
         }
         let documentHeight = max(previews.contentSize.height,y)
         previewDocument.frame = NSRect(x:0,y:0,width:cellWidth,height:documentHeight)
