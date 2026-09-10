@@ -4,14 +4,24 @@ The initial application targets Apple Silicon, macOS 15 or later, and local
 Apple iPhone/iPad simulators. Bundle identifier: `com.scchan.simutex`.
 
 Validated on September 8, 2026 with macOS 27 beta (26A5425a), Xcode 27 beta
-(27A5237l), and iOS 27 simulators. Older OS/Xcode combinations have not received
-live display/input validation. Private APIs can change between Xcode releases.
+(27A5237l), and iOS 27 simulators. Display and input were also exercised on
+September 10, 2026 with Xcode 26.6 (17F113) and an iOS 26.5 simulator; that
+Xcode has no `com.apple.coredevice.feature.remote.hid.digitizer` service, so it
+always takes the SimulatorKit legacy HID path. Other OS/Xcode combinations have
+not received live display/input validation. Private APIs can change between
+Xcode releases.
 The application loads frameworks from the selected Xcode; restart after changing
 that selection. No private desktop frameworks are required by the standalone CLI.
 
 The bridge uses CoreSimulator display ports, SimScreen IOSurface callbacks,
-SimulatorKit HID transport and the Xcode 27 DTUHID endpoint. ABI research used
-[facebook/idb](https://github.com/facebook/idb), particularly its
+SimulatorKit HID transport and the Xcode 27 DTUHID endpoint. Legacy hardware
+buttons follow the encoding Simulator.app itself uses,
+`IndigoHIDMessageForButton(keyCode, 1 press / 0 release, target)`; a keycode or
+target the runtime does not know tears the device's Indigo HID session down and
+every later event fails with "Mach port invalid, device disconnected" until the
+simulator reboots. A correct Home press still resets that session once, so the
+first event after it can fail and the transport recovers on its own. ABI
+research used [facebook/idb](https://github.com/facebook/idb), particularly its
 FBSimulatorControl HID implementation and private framework declarations.
 The bridge is maintained here and does not require idb at runtime.
 

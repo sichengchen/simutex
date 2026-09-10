@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable IOSurfaceRef)copySurface CF_RETURNS_RETAINED;
 - (void)setOwnershipLockPath:(NSString *)path owner:(NSString *)owner;
 - (BOOL)enableInput:(NSError **)error;
+- (BOOL)recoverInput:(NSError **)error;
+- (nullable NSString *)takeInputError;
 - (void)disableInput;
 - (void)touchX:(double)x y:(double)y phase:(NSInteger)phase;
 - (void)keyUsage:(unsigned int)usage down:(BOOL)down;

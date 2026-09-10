@@ -33,6 +33,13 @@
 - (void)sendWithMessage:(void *)message freeWhenDone:(BOOL)freeWhenDone completionQueue:(dispatch_queue_t)queue completion:(void (^)(NSError *))completion;
 @end
 
+// Simulator.app builds hardware buttons as IndigoHIDMessageForButton(keyCode,
+// 1 for press / 0 for release, target). An unknown keycode/target pair tears the
+// device's Indigo HID session down: every later event fails with "Mach port
+// invalid, device disconnected" until the simulator reboots.
+static const int kIndigoHomeKeyCode = 0x190;
+static const int kIndigoHomeTarget = 0x15;
+
 static NSError *sxError(NSString *message) { return [NSError errorWithDomain:@"simutex.simulator" code:1 userInfo:@{NSLocalizedDescriptionKey:message}]; }
 static BOOL loadFrameworks(NSString *directory, NSError **error) {
     if (!dlopen("/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator", RTLD_NOW|RTLD_GLOBAL)) { if(error)*error=sxError(@"CoreSimulator is unavailable. Select a full Xcode installation in Settings."); return NO; }
@@ -121,6 +128,7 @@ static BOOL loadFrameworks(NSString *directory, NSError **error) {
 - (uint64_t)generation { @synchronized(self) { return _generation; } }
 - (NSInteger)orientation { @synchronized(self) { return _orientation; } }
 - (NSString *)inputError { @synchronized(self) { return _inputError; } }
+- (NSString *)takeInputError { @synchronized(self) { NSString *value=_inputError; _inputError=nil; return value; } }
 - (IOSurfaceRef)copySurface { @synchronized(self) { return _surface ? (IOSurfaceRef)CFRetain(_surface) : NULL; } }
 - (void)sendDTU:(NSString *)type payload:(xpc_object_t)payload {
     xpc_object_t message=xpc_dictionary_create(NULL,NULL,0);
@@ -173,6 +181,18 @@ static BOOL loadFrameworks(NSString *directory, NSError **error) {
         } @catch(NSException *e) { if(error)*error=sxError(e.reason); return NO; }
     }
 }
+// Pressing Home makes the runtime reset its HID session, so a single failed send
+// is expected and the transport recovers by itself. Callers retry through this
+// when failures persist.
+- (BOOL)recoverInput:(NSError **)error {
+    @synchronized(self) {
+        if(_closed) { if(error)*error=sxError(@"Simulator disconnected"); return NO; }
+        if(!_connection && !_legacy) { if(error)*error=sxError(@"Manual input is not enabled"); return NO; }
+        [self disableInput];
+        _inputError=nil;
+    }
+    return [self enableInput:error];
+}
 - (void)sendLegacy:(void *)message {
     if(!message)return;
     if(!_legacy) { free(message); return; }
@@ -223,7 +243,7 @@ static BOOL loadFrameworks(NSString *directory, NSError **error) {
     @synchronized(self) {
         if(_closed || (state==1 && ![self ownsLock]))return;
         if(_connection){xpc_object_t p=xpc_dictionary_create(NULL,NULL,0);xpc_dictionary_set_uint64(p,"usagePage",0x0c);xpc_dictionary_set_uint64(p,"usageCode",0x40);xpc_dictionary_set_uint64(p,"state",state);[self sendDTU:@"IndigoButtonEvent" payload:p];}
-        else {void *(*build)(int,int,int)=dlsym(RTLD_DEFAULT,"IndigoHIDMessageForButton");if(build)[self sendLegacy:build(0,state,0)];}
+        else {void *(*build)(int,int,int)=dlsym(RTLD_DEFAULT,"IndigoHIDMessageForButton");if(build)[self sendLegacy:build(kIndigoHomeKeyCode,state==1?1:0,kIndigoHomeTarget)];}
     }
 }
 - (void)home {

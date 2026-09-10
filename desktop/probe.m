@@ -20,7 +20,12 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [session home]; [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
         if (!strcmp(argv[2],"--input")) { [session touchX:0.85 y:0.49 phase:0]; [NSThread sleepForTimeInterval:0.08]; [session touchX:0.85 y:0.49 phase:2]; }
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:1]];
-        printf("input %s generation %llu\n", session.inputError.UTF8String ?: "connected", session.generation);
+        // Home resets the runtime's HID session, so one failed event is expected;
+        // report only what survives a follow-up event.
+        NSString *transient=[session takeInputError];
+        [session touchX:0.5 y:0.5 phase:0]; [NSThread sleepForTimeInterval:0.08]; [session touchX:0.5 y:0.5 phase:2];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        printf("input %s%s generation %llu\n", session.inputError.UTF8String ?: "connected", transient ? " after a transient HID reset" : "", session.generation);
     }
     CFRelease(surface); surface=[session copySurface];
     CIImage *image=[CIImage imageWithIOSurface:surface];

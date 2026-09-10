@@ -80,6 +80,9 @@ final class SimulatorTile: NSView {
     private var connecting = false
     private var retry: DispatchWorkItem?
     private var observedState = ""
+    private var inputFailures = 0
+    private var lastInputFailure = Date.distantPast
+    private var recovering = false
     private var large = false
     private var hovered = false
     private var tracking: NSTrackingArea?
@@ -104,6 +107,7 @@ final class SimulatorTile: NSView {
         display.onFocus = { [weak self] in guard let self else { return }; self.controller?.focus(self.device.udid) }
         display.onGeometryChange = { [weak self] in self?.controller?.layoutTiles() }
         display.onFailure = { [weak self] error in self?.showFailure(error) }
+        display.onInputFailure = { [weak self] error in self?.handleInputFailure(error) }
         update(device)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -228,6 +232,25 @@ final class SimulatorTile: NSView {
         }
     }
     func showFailure(_ error: String) { spinner.stopAnimation(nil); message.stringValue = error; message.toolTip = error; message.isHidden = false }
+    // Home makes the runtime reset its HID session, so one failed event is normal
+    // and the transport comes back on its own. Only rebuild it once failures stick.
+    func handleInputFailure(_ failure: String) {
+        if Date().timeIntervalSince(lastInputFailure) > 5 { inputFailures = 0 }
+        lastInputFailure = Date(); inputFailures += 1
+        guard inputFailures >= 3, !recovering, let session = display.session else { return }
+        inputFailures = 0; recovering = true
+        // Re-enabling input can block on the transport, so never on the UI thread.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var recovered = false
+            do { try session.recoverInput(); recovered = true } catch { recovered = false }
+            DispatchQueue.main.async {
+                guard let self, self.display.session === session else { return }
+                self.recovering = false
+                if recovered { self.message.isHidden = true }
+                else { self.display.interactive = false; self.showFailure(failure) }
+            }
+        }
+    }
     func connect() {
         guard device.running else { return }
         connecting = true; connectGeneration += 1

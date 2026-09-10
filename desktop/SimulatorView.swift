@@ -5,6 +5,7 @@ import IOSurface
 final class SimulatorView: MTKView, MTKViewDelegate {
     var onFocus: (() -> Void)?
     var onFailure: ((String) -> Void)?
+    var onInputFailure: ((String) -> Void)?
     var onGeometryChange: (() -> Void)?
     var aspectRatio: CGFloat { (orientation == 3 || orientation == 4) ? surfaceSize.height / surfaceSize.width : surfaceSize.width / surfaceSize.height }
     var session: SXSimulatorSession? { didSet { displayedGeneration = .max; needsDisplay = true } }
@@ -78,7 +79,7 @@ final class SimulatorView: MTKView, MTKViewDelegate {
         let timer = Timer(timeInterval: 1.0 / Double(framesPerSecond), repeats: true) { [weak self] _ in
             guard let self else { return }
             guard let window = self.window, window.isVisible && !window.isMiniaturized, !self.visibleRect.isEmpty else { return }
-            if let error = self.session?.inputError { self.interactive = false; self.onFailure?(error) }
+            if let error = self.session?.takeInputError() { self.onInputFailure?(error) }
             if self.session?.generation != self.displayedGeneration { self.needsDisplay = true }
         }
         timer.tolerance = 0.002; RunLoop.main.add(timer, forMode: .common); self.timer = timer
