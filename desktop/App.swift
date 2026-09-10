@@ -25,44 +25,20 @@ func symbolButton(_ symbol: String, _ help: String, action: @escaping () -> Void
     return b
 }
 
-// Retain NSButton's keyboard and accessibility behavior without its permanent bezel.
-final class QuietIconButton: ActionButton {
-    private var hovered = false
-    private var tracking: NSTrackingArea?
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
-        addTrackingArea(tracking!)
-    }
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
-    override func draw(_ dirtyRect: NSRect) {
-        if isEnabled && (hovered || isHighlighted) {
-            NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.07).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
-        }
-        let color: NSColor = hovered && isEnabled ? .labelColor : .secondaryLabelColor
-        if let icon = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color])) {
-            let scale = min(16 / max(1, icon.size.width), 16 / max(1, icon.size.height))
-            let size = NSSize(width: icon.size.width*scale, height: icon.size.height*scale)
-            icon.draw(in: NSRect(x: (bounds.width-size.width)/2, y: (bounds.height-size.height)/2, width: size.width, height: size.height), from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.35, respectFlipped: true, hints: nil)
-        }
-        if window?.firstResponder === self {
-            NSColor.keyboardFocusIndicatorColor.setStroke()
-            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
-            ring.lineWidth = 2; ring.stroke()
-        }
-    }
-}
-func controlButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> QuietIconButton {
-    let button = QuietIconButton("", action: action)
-    button.isBordered = false; button.imagePosition = .imageOnly
-    button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
+func controlButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> ActionButton {
+    let button = ActionButton("", action: action)
+    button.bezelStyle = .toolbar; button.controlSize = .regular
+    button.isBordered = true; button.showsBorderOnlyWhileMouseInside = true
+    button.imagePosition = .imageOnly
+    button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)
     button.toolTip = help; button.setAccessibilityLabel(help)
     button.widthAnchor.constraint(equalToConstant: 32).isActive = true
     button.heightAnchor.constraint(equalToConstant: 28).isActive = true
     return button
+}
+
+final class ScreenShade: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 final class SimulatorTile: NSView {
@@ -72,7 +48,8 @@ final class SimulatorTile: NSView {
     let name = label("", size: 12, weight: .medium)
     let sessionOwner = label("", size: 11)
     let message = label("", size: 12)
-    private let unavailable = label("", size: 12, weight: .medium)
+    private let unavailable = label("", size: 18, weight: .medium)
+    private let screenShade = ScreenShade()
     let controls = NSStackView()
     private let controlsBackground: NSView = {
         if #available(macOS 26.0, *) {
@@ -110,9 +87,10 @@ final class SimulatorTile: NSView {
         sessionOwner.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         unavailable.alignment = .center; unavailable.maximumNumberOfLines = 3
         unavailable.lineBreakMode = .byWordWrapping
-        unavailable.drawsBackground = true
-        unavailable.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.9)
-        unavailable.wantsLayer = true; unavailable.layer?.cornerRadius = 8
+        unavailable.textColor = .white
+        screenShade.wantsLayer = true
+        screenShade.layer?.backgroundColor = NSColor.black.cgColor
+        screenShade.alphaValue = 0
         message.textColor = .secondaryLabelColor; message.maximumNumberOfLines = 3; message.isHidden = true
         controls.orientation = .horizontal; controls.spacing = 4
         controls.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
@@ -121,9 +99,8 @@ final class SimulatorTile: NSView {
         } else { controlsBackground.addSubview(controls) }
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
         more = controlButton("ellipsis", "Device actions") { [weak self] in self?.showActions() }
-        more.isBordered = false
         ownership.imageScaling = .scaleProportionallyDown
-        for view in [display, name, sessionOwner, ownership, controlsBackground, unavailable, message, spinner] { addSubview(view) }
+        for view in [display, screenShade, name, sessionOwner, ownership, controlsBackground, unavailable, message, spinner] { addSubview(view) }
         display.onFocus = { [weak self] in guard let self else { return }; self.controller?.focus(self.device.udid) }
         display.onGeometryChange = { [weak self] in self?.controller?.layoutTiles() }
         display.onFailure = { [weak self] error in self?.showFailure(error) }
@@ -154,7 +131,11 @@ final class SimulatorTile: NSView {
         let controlWidth = count*32 + max(0,count-1)*4 + 8
         controlsBackground.frame = NSRect(x: (bounds.width-controlWidth)/2, y: 3, width: controlWidth, height: 32)
         controls.frame = controlsBackground.bounds
-        unavailable.frame = NSRect(x: 12, y: display.frame.midY-30, width: max(0,bounds.width-24), height: 60)
+        screenShade.frame = display.frame
+        unavailable.font = .systemFont(ofSize: large ? 18 : 12, weight: .medium)
+        let textWidth = max(0, display.frame.width-32)
+        let textHeight = unavailable.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textWidth, height: 120)).height ?? 60
+        unavailable.frame = NSRect(x: display.frame.minX+16, y: display.frame.midY-textHeight/2, width: textWidth, height: textHeight)
         message.frame = NSRect(x: 16, y: display.frame.minY+12, width: max(0,bounds.width-32), height: 50)
         spinner.frame = NSRect(x: bounds.midX-8, y: bounds.midY-8, width: 16, height: 16)
     }
@@ -169,11 +150,11 @@ final class SimulatorTile: NSView {
     private func updateHover() {
         let show = hovered && device.viewOnly
         unavailable.isHidden = !show
-        let opacity: CGFloat = show ? 0.35 : 1
-        if display.alphaValue != opacity {
+        let opacity: CGFloat = show ? 0.6 : 0
+        if screenShade.alphaValue != opacity {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
-                display.animator().alphaValue = opacity
+                screenShade.animator().alphaValue = opacity
             }
         }
     }
@@ -187,7 +168,7 @@ final class SimulatorTile: NSView {
         ownership.image = NSImage(systemSymbolName: next.isLocked ? "lock.fill" : "lock.open", accessibilityDescription: next.lockStatus)
         ownership.contentTintColor = next.lockedByMe ? .controlAccentColor : (next.isLocked ? .systemOrange : .secondaryLabelColor)
         ownership.toolTip = next.lockStatus
-        unavailable.stringValue = next.owner.map { "Claimed by \($0)\nView only" } ?? "Lock this simulator to use it"
+        unavailable.stringValue = next.owner.map { "Simulator in Use\n\($0)\nView only" } ?? "Lock this simulator to use it"
         updateHover()
         refreshControls()
         if changed { disconnect() }
