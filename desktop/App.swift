@@ -184,11 +184,17 @@ final class SimulatorTile: NSView {
         let mine = device.lockedByMe
         let automatic = controller?.layoutMode == .auto
         defer {
-            controls.addArrangedSubview(controlButton("info.circle", "Inspector") { [weak self] in
-                guard let self else { return }; self.controller?.inspect(self.device.udid)
-            })
             controls.addArrangedSubview(more)
             needsLayout = true
+        }
+        func addOwnershipControl() {
+            if mine {
+                controls.addArrangedSubview(controlButton("lock.open", "Unlock") { [weak self] in self?.unlock() })
+            } else if device.isLocked {
+                controls.addArrangedSubview(controlButton("lock.trianglebadge.exclamationmark", "Take over") { [weak self] in self?.claim() })
+            } else {
+                controls.addArrangedSubview(controlButton("lock", "Lock for my use") { [weak self] in self?.claim() })
+            }
         }
         func addMembershipControl() {
             let pinned = controller?.isPinned(device.udid) == true
@@ -200,6 +206,7 @@ final class SimulatorTile: NSView {
             })
         }
         guard controller?.isInWorkspace(device.udid) == true else {
+            addOwnershipControl()
             if automatic { addMembershipControl() } else {
                 controls.addArrangedSubview(controlButton("plus.circle", "Add to main panel") { [weak self] in guard let self else { return }; self.controller?.addToWorkspace(self.device.udid) })
             }
@@ -211,13 +218,7 @@ final class SimulatorTile: NSView {
             controls.addArrangedSubview(controlButton("rotate.right", "Rotate") { [weak self] in self?.rotate() })
         }
         if !automatic { controls.addArrangedSubview(controlButton("arrow.up.left.and.arrow.down.right", "Enlarge") { [weak self] in guard let self else { return }; self.controller?.enlarge(self.device.udid) }) }
-        if mine {
-            controls.addArrangedSubview(controlButton("lock.open", "Unlock") { [weak self] in self?.unlock() })
-        } else if device.isLocked {
-            controls.addArrangedSubview(controlButton("lock.trianglebadge.exclamationmark", "Take over") { [weak self] in self?.claim() })
-        } else {
-            controls.addArrangedSubview(controlButton("lock", "Lock for my use") { [weak self] in self?.claim() })
-        }
+        addOwnershipControl()
         addMembershipControl()
         needsLayout = true
     }
