@@ -16,13 +16,20 @@ that selection. No private desktop frameworks are required by the standalone CLI
 The bridge uses CoreSimulator display ports, SimScreen IOSurface callbacks,
 SimulatorKit HID transport and the Xcode 27 DTUHID endpoint. Legacy hardware
 buttons follow the encoding Simulator.app itself uses,
-`IndigoHIDMessageForButton(keyCode, 1 press / 0 release, target)`; a keycode or
-target the runtime does not know tears the device's Indigo HID session down and
-every later event fails with "Mach port invalid, device disconnected" until the
-simulator reboots. A correct Home press still resets that session once, so the
-first event after it can fail and the transport recovers on its own. ABI
-research used [facebook/idb](https://github.com/facebook/idb), particularly its
-FBSimulatorControl HID implementation and private framework declarations.
+`IndigoHIDMessageForButton(keyCode, 1 press / 2 release, target)`. Home is
+keycode `0x0` with target `0x33`, matching Simulator.app's `-homeButtonPressed:`
+(keycode `0` off Apple TV) and `SimDeviceScreen.buttonTarget` (`0x33` for a
+device with an internal display; only iOS runtimes are listed here). A keycode
+or target the runtime does not know does something else or nothing: the Apple TV
+remote pair (`0x190`, `0x15`) restarts SpringBoard instead of pressing Home, and
+that restart tears the device's Indigo HID session down, after which every event
+fails with "Mach port invalid, device disconnected" until the transport is
+rebuilt. Verified on September 14, 2026 against Xcode 26.6 with an iOS 26.5
+iPhone simulator: the corrected press returns to the Home screen and leaves the
+SpringBoard process untouched. ABI research used
+[facebook/idb](https://github.com/facebook/idb), particularly its
+FBSimulatorControl HID implementation and private framework declarations, and
+the Simulator.app/SimulatorKit disassembly for the button encoding.
 The bridge is maintained here and does not require idb at runtime.
 
 ## Checks

@@ -34,11 +34,16 @@
 @end
 
 // Simulator.app builds hardware buttons as IndigoHIDMessageForButton(keyCode,
-// 1 for press / 0 for release, target). An unknown keycode/target pair tears the
-// device's Indigo HID session down: every later event fails with "Mach port
-// invalid, device disconnected" until the simulator reboots.
-static const int kIndigoHomeKeyCode = 0x190;
-static const int kIndigoHomeTarget = 0x15;
+// 1 for press / 2 for release, target). Its -homeButtonPressed: sends keycode 0
+// on anything that is not an Apple TV, and takes the target from
+// SimDeviceScreen.buttonTarget, which is 0x33 for a device with an internal
+// display: every iPhone and iPad simulator, the only runtimes this app lists.
+// The Apple TV remote pair (0x190, 0x15) does not press Home on an iOS runtime;
+// it restarts SpringBoard, which also tears the device's Indigo HID session
+// down, so every later event fails with "Mach port invalid, device
+// disconnected" until the transport is rebuilt.
+static const int kIndigoHomeKeyCode = 0x0;
+static const int kIndigoHomeTarget = 0x33;
 
 static NSError *sxError(NSString *message) { return [NSError errorWithDomain:@"simutex.simulator" code:1 userInfo:@{NSLocalizedDescriptionKey:message}]; }
 static BOOL loadFrameworks(NSString *directory, NSError **error) {
@@ -181,9 +186,8 @@ static BOOL loadFrameworks(NSString *directory, NSError **error) {
         } @catch(NSException *e) { if(error)*error=sxError(e.reason); return NO; }
     }
 }
-// Pressing Home makes the runtime reset its HID session, so a single failed send
-// is expected and the transport recovers by itself. Callers retry through this
-// when failures persist.
+// A runtime that drops its Indigo HID session fails every later event until the
+// transport is rebuilt. Callers retry through this when failures persist.
 - (BOOL)recoverInput:(NSError **)error {
     @synchronized(self) {
         if(_closed) { if(error)*error=sxError(@"Simulator disconnected"); return NO; }
@@ -243,7 +247,7 @@ static BOOL loadFrameworks(NSString *directory, NSError **error) {
     @synchronized(self) {
         if(_closed || (state==1 && ![self ownsLock]))return;
         if(_connection){xpc_object_t p=xpc_dictionary_create(NULL,NULL,0);xpc_dictionary_set_uint64(p,"usagePage",0x0c);xpc_dictionary_set_uint64(p,"usageCode",0x40);xpc_dictionary_set_uint64(p,"state",state);[self sendDTU:@"IndigoButtonEvent" payload:p];}
-        else {void *(*build)(int,int,int)=dlsym(RTLD_DEFAULT,"IndigoHIDMessageForButton");if(build)[self sendLegacy:build(kIndigoHomeKeyCode,state==1?1:0,kIndigoHomeTarget)];}
+        else {void *(*build)(int,int,int)=dlsym(RTLD_DEFAULT,"IndigoHIDMessageForButton");if(build)[self sendLegacy:build(kIndigoHomeKeyCode,state,kIndigoHomeTarget)];}
     }
 }
 - (void)home {

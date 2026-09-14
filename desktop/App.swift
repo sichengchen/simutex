@@ -287,8 +287,8 @@ final class SimulatorTile: NSView {
         }
     }
     func showFailure(_ error: String) { spinner.stopAnimation(nil); message.stringValue = error; message.toolTip = error; message.isHidden = false }
-    // Home makes the runtime reset its HID session, so one failed event is normal
-    // and the transport comes back on its own. Only rebuild it once failures stick.
+    // A dropped Indigo HID session fails every later event, but an isolated
+    // failure also happens in normal use. Only rebuild once failures stick.
     func handleInputFailure(_ failure: String) {
         if Date().timeIntervalSince(lastInputFailure) > 5 { inputFailures = 0 }
         lastInputFailure = Date(); inputFailures += 1
